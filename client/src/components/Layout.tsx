@@ -54,7 +54,7 @@ function Header() {
   }, []);
   const nav = ({ isActive }: { isActive: boolean }) => `rounded-lg px-3 py-2 text-sm transition ${isActive ? 'text-sand-50' : 'text-sand-400 hover:text-sand-100'}`;
   return (
-    <header className={`sticky top-0 z-40 transition-colors duration-300 ${scrolled ? 'border-b border-sand-50/[0.06] bg-night-900/80 backdrop-blur-xl' : 'bg-transparent'}`}>
+    <header className={`sticky top-0 z-40 transition-colors duration-300 ${scrolled ? 'border-b border-sand-50/[0.06] bg-night-900/80 backdrop-blur-xl' : 'bg-gradient-to-b from-night-950/80 to-transparent'}`}>
       <div className="mx-auto flex h-16 max-w-[1440px] items-center gap-4 px-4 sm:px-6">
         <Wordmark />
         <nav className="ml-4 hidden items-center md:flex">
@@ -87,10 +87,18 @@ function DryRunBar() {
   const { dryRun, simMode } = useConfig();
   if (!dryRun && !simMode) return null;
   return (
-    <div className="relative z-40 border-b border-gold/20 bg-gold/[0.07] px-4 py-1.5 text-center font-mono text-[11px] uppercase tracking-[0.16em] text-gold-hot">
-      {dryRun && 'dry run · launches are simulated, nothing is broadcast'}
+    <div className="relative z-40 border-b border-gold/20 bg-gold/[0.07] px-4 py-1.5 text-center font-mono text-[10.5px] uppercase tracking-[0.16em] text-gold-hot sm:text-[11px]">
+      {dryRun && (
+        <>
+          dry run<span className="hidden sm:inline"> · launches are simulated, nothing is broadcast</span>
+        </>
+      )}
       {dryRun && simMode && ' · '}
-      {simMode && 'sim mode · synthetic bricks'}
+      {simMode && (
+        <>
+          sim mode<span className="hidden sm:inline"> · synthetic bricks</span>
+        </>
+      )}
     </div>
   );
 }

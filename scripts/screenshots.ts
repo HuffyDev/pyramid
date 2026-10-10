@@ -38,9 +38,9 @@ const TEST_WALLET = `(() => {
   const account = { address: enc(pk), publicKey: pk, chains: ['solana:mainnet'], features: ['solana:signTransaction', 'solana:signMessage'] };
   const icon = 'data:image/svg+xml;base64,' + btoa('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="8" fill="#ffb52e"/></svg>');
   const wallet = {
-    version: '1.0.0', name: 'Test Wallet', icon, chains: ['solana:mainnet'], accounts: [account],
+    version: '1.0.0', name: 'Test Wallet', icon, chains: ['solana:mainnet'], accounts: [],
     features: {
-      'standard:connect': { version: '1.0.0', connect: async () => ({ accounts: [account] }) },
+      'standard:connect': { version: '1.0.0', connect: async () => { console.log('test-wallet connect'); wallet.accounts = [account]; return { accounts: [account] }; } },
       'standard:disconnect': { version: '1.0.0', disconnect: async () => {} },
       'standard:events': { version: '1.0.0', on: () => () => {} },
       'solana:signMessage': { version: '1.0.0', signMessage: async (...inputs) => inputs.map((i) => ({ signedMessage: i.message, signature: new Uint8Array(64).fill(7) })) },
@@ -87,6 +87,14 @@ const sizes = [
   { name: '390', viewport: { width: 390, height: 844 }, mobile: true },
 ];
 
+async function addImage(page: Page) {
+  const file = await pickImage(page);
+  await page.locator('input[type=file]').setInputFiles(file);
+  await page.getByRole('button', { name: /use image/i }).click();
+  await page.getByRole('dialog', { name: /crop/i }).waitFor({ state: 'detached', timeout: 10_000 });
+  await sleep(300);
+}
+
 async function shoot(port: number, label: string, fn?: (p: Page) => Promise<void>) {
   for (const s of sizes) {
     const ctx = await browser.newContext({ viewport: s.viewport, deviceScaleFactor: 2, isMobile: s.mobile, hasTouch: s.mobile });
@@ -95,40 +103,45 @@ async function shoot(port: number, label: string, fn?: (p: Page) => Promise<void
     await page.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'networkidle' });
     await page.evaluate(() => document.fonts.ready);
     await sleep(1800);
-    if (fn) await fn(page);
+    page.on('console', (m) => m.type() === 'error' && console.log(`  [console] ${m.text().slice(0, 200)}`));
+    if (fn) {
+      try {
+        await fn(page);
+      } catch (e) {
+        await page.screenshot({ path: path.join(OUT, `debug-${label}-${s.name}.png`) });
+        throw e;
+      }
+    }
     await page.screenshot({ path: path.join(OUT, `${label}-${s.name}.png`) });
     console.log(`✓ ${label}-${s.name}.png`);
     await ctx.close();
   }
 }
 
-const empty = await boot(5101, { SIM_MODE: 'false' });
-await shoot(5101, '01-empty');
-empty.kill();
+const only = process.argv[2];
+if (!only || only === 'empty') {
+  const empty = await boot(5101, { SIM_MODE: 'false' });
+  await shoot(5101, '01-empty');
+  empty.kill();
+}
 
 const sim = await boot(5102, { SIM_MODE: 'true', SIM_SEED: '50', SIM_INTERVAL_MS: '0' });
-await shoot(5102, '02-50-bricks');
-await shoot(5102, '03-launch-sheet', async (page) => {
+if (!only || only === 'bricks') await shoot(5102, '02-50-bricks');
+if (!only || only === 'sheet') await shoot(5102, '03-launch-sheet', async (page) => {
   await page.getByRole('button', { name: /lay a brick/i }).first().click();
   await sleep(400);
   await page.getByPlaceholder('Sand Cat').fill('Oasis Owl');
   await page.getByPlaceholder('SCAT').fill('OWL');
   await page.getByPlaceholder('one more stone for the monument.').fill('a night bird that guards the bottom row.');
-  const file = await pickImage(page);
-  await page.locator('input[type=file]').setInputFiles(file);
-  await page.getByRole('button', { name: /use image/i }).click();
-  await sleep(700);
+  await addImage(page);
 });
-await shoot(5102, '04-success', async (page) => {
+if (!only || only === 'success') await shoot(5102, '04-success', async (page) => {
   // connect the test wallet first
   await page.getByRole('button', { name: /lay a brick/i }).first().click();
   await sleep(300);
   await page.getByPlaceholder('Sand Cat').fill('Oasis Owl');
   await page.getByPlaceholder('SCAT').fill('OWL');
-  const file = await pickImage(page);
-  await page.locator('input[type=file]').setInputFiles(file);
-  await page.getByRole('button', { name: /use image/i }).click();
-  await sleep(300);
+  await addImage(page);
   await page.getByRole('button', { name: /connect wallet/i }).click();
   await page.getByRole('button', { name: /test wallet/i }).click();
   await sleep(700);
@@ -136,5 +149,19 @@ await shoot(5102, '04-success', async (page) => {
   await page.getByText(/your brick:/i).waitFor({ timeout: 20_000 });
   await sleep(1500);
 });
+if (only === 'pages') {
+  const mint = ((await (await fetch('http://127.0.0.1:5102/api/pyramid')).json()) as { bricks: { mint: string; mcap: number }[] }).bricks.sort((a, b) => b.mcap - a.mcap)[0].mint;
+  for (const [label, url] of [['05-brick', `/brick/${mint}`], ['06-leaderboard', '/leaderboard'], ['07-leaderboard-cracked', '/leaderboard?by=cracked']]) {
+    for (const s of sizes) {
+      const ctx = await browser.newContext({ viewport: s.viewport, deviceScaleFactor: 2, isMobile: s.mobile, hasTouch: s.mobile });
+      const page = await ctx.newPage();
+      await page.goto(`http://127.0.0.1:5102${url}`, { waitUntil: 'networkidle' });
+      await sleep(1200);
+      await page.screenshot({ path: path.join(OUT, `${label}-${s.name}.png`) });
+      console.log(`✓ ${label}-${s.name}.png`);
+      await ctx.close();
+    }
+  }
+}
 sim.kill();
 await browser.close();

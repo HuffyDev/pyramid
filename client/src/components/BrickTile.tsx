@@ -33,6 +33,8 @@ export function BrickTile({ data, width = 240, className = '' }: { data: TileDat
       if (!live) return;
       const x = c.getContext('2d')!;
       x.setTransform(1, 0, 0, 1, 0, 0);
+      x.textAlign = 'left'; // context state survives redraws
+      x.globalAlpha = 1;
       x.clearRect(0, 0, c.width, c.height);
       const seed = data.mint ?? data.ticker;
       drawBrickSurface(x, c.width, c.height, { glow: glowOf(data.mcap), crack: data.crack ?? 0, variant: hash(seed) % VARIANTS, hidden: data.hidden });
@@ -65,7 +67,7 @@ export function BrickTile({ data, width = 240, className = '' }: { data: TileDat
       x.fillText(tk, tx, 22);
       x.font = '500 10px "JetBrains Mono", monospace';
       x.fillStyle = 'rgba(42,24,6,0.78)';
-      x.fillText(data.caption ?? (data.crack ? 'cracked' : usdShort(data.mcap)), tx, 37);
+      x.fillText(data.caption ?? (data.crack ? 'cracked' : data.mcap == null ? 'fresh' : usdShort(data.mcap)), tx, 37);
       if (data.n) {
         x.font = '500 7px "JetBrains Mono", monospace';
         x.fillStyle = 'rgba(42,24,6,0.55)';

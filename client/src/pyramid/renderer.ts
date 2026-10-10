@@ -214,8 +214,9 @@ export class PyramidRenderer {
     if (n < 1) return;
     const s = slotOf(n);
     this.autoFit = false;
-    const z = opts.zoom ?? Math.max(this.fitCam.s * 2.4, Math.min(1.1, this.fitCam.s * 6));
-    this.target = { x: s.x, y: s.y, s: this.clampS(z) };
+    const z = this.clampS(opts.zoom ?? Math.min(1.05, Math.max(this.fitCam.s * 1.25, 0.75)));
+    // sit the brick a little above center: overlays (success dock, CTA) live at the bottom
+    this.target = { x: s.x, y: s.y + (this.H * 0.12) / z, s: z };
     this.dirty = true;
   }
 
@@ -258,8 +259,12 @@ export class PyramidRenderer {
     const maxY = Math.max(b.maxY, slotOf(this.bricks.length + 1).y + BRICK_H / 2);
     const bw = b.maxX - b.minX + (this.bricks.length < 3 ? BRICK_W * 2 : 0);
     const bh = maxY - b.minY;
-    const s = Math.min((this.W - padX * 2) / bw, (this.H - top - bottom) / bh, this.opts.compact ? 2 : 1.35);
-    const cy = (b.minY + maxY) / 2 + (bottom - top) / 2 / s;
+    const availH = this.H - top - bottom;
+    const s = Math.min((this.W - padX * 2) / bw, availH / bh, this.opts.compact ? 2 : 1.35);
+    // width-limited (phones): hang the pyramid near the top of its area instead of floating mid-air
+    const slack = Math.max(0, availH - bh * s);
+    const topPx = top + slack * (this.opts.compact ? 0.5 : 0.22);
+    const cy = b.minY + (this.H / 2 - topPx) / s;
     this.fitCam = { x: 0, y: cy, s: Math.max(0.02, s) };
   }
 
@@ -647,7 +652,9 @@ export class PyramidRenderer {
     const hl = this.highlight && this.highlight.until > t ? this.highlight.n : null;
     if (hl && hl <= count) {
       const s = slotOf(hl);
-      const a = 0.55 + 0.45 * Math.sin(t / 220);
+      const a = this.opts.reducedMotion ? 0.9 : 0.55 + 0.45 * Math.sin(t / 220);
+      x.fillStyle = `rgba(255,211,110,${0.35 * a})`;
+      x.fillRect(s.x - BRICK_W / 2, s.y - BRICK_H / 2, BRICK_W, BRICK_H);
       x.strokeStyle = `rgba(255,211,110,${a})`;
       x.lineWidth = Math.max(1.5, 2.5 / S);
       x.strokeRect(s.x - BRICK_W / 2 - 3, s.y - BRICK_H / 2 - 3, BRICK_W + 6, BRICK_H + 6);
@@ -767,7 +774,7 @@ export class PyramidRenderer {
     x.fillText(tk, tx, T + 22);
     x.font = '500 10px "JetBrains Mono", monospace';
     x.fillStyle = crack ? 'rgba(20,14,8,0.6)' : 'rgba(42,24,6,0.78)';
-    x.fillText(crack ? 'cracked' : usdShort(b.mcap), tx, T + 37);
+    x.fillText(crack ? 'cracked' : b.mcap == null && now - Date.parse(b.placedAt) < 864e5 ? 'fresh' : usdShort(b.mcap), tx, T + 37);
     if (S > 1.4) {
       x.font = '500 7px "JetBrains Mono", monospace';
       x.fillStyle = 'rgba(42,24,6,0.55)';

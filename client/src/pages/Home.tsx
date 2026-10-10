@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { crackLevel } from '../../../shared/pyramid';
 import { PyramidStage, BrickThumb, type StageHandle } from '../components/PyramidStage';
@@ -20,6 +20,7 @@ export default function Home() {
   const { bricks, loaded } = usePyramid();
   const [params, setParams] = useSearchParams();
   const mobile = useMedia('(max-width: 767px)');
+  const [zoomed, setZoomed] = useState(false);
 
   // a launch just landed: fly to its slot and drop it in
   useEffect(() => {
@@ -48,10 +49,16 @@ export default function Home() {
       {/* ── hero: the pyramid ── */}
       <section className="relative -mt-16">
         <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(900px_520px_at_50%_18%,#1b2150_0%,transparent_70%)]" />
-        <PyramidStage ref={stage} className="h-[max(560px,100svh)] md:h-[max(640px,calc(100svh-44px))]" inset={mobile ? { top: 190, bottom: 70 } : { top: 64, bottom: 10 }} />
+        <PyramidStage
+          ref={stage}
+          className="h-[clamp(600px,100svh,720px)] md:h-[max(640px,calc(100svh-44px))]"
+          inset={mobile ? { top: 250, bottom: 84 } : { top: 64, bottom: 10 }}
+          controlsClass="bottom-[84px] md:bottom-6"
+          onZoomed={setZoomed}
+        />
 
         {/* headline: top-left sky on desktop, top center on mobile */}
-        <div className="pointer-events-none absolute inset-x-0 top-16 z-10">
+        <div className={`pointer-events-none absolute inset-x-0 top-16 z-10 transition-[opacity,visibility] duration-500 ${zoomed ? 'invisible opacity-0' : 'visible opacity-100'}`}>
           <div className="mx-auto max-w-[1440px] px-4 pt-5 text-center sm:px-6 md:pt-10 md:text-left">
             <div className="eyebrow animate-rise text-gold/90">a solana launchpad · est. brick #1</div>
             <h1 className="display mt-3 animate-rise text-[34px] leading-[1.02] [animation-delay:80ms] sm:text-5xl md:max-w-[440px] md:text-[64px]">every coin is a brick.</h1>

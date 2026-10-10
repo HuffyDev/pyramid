@@ -1,3 +1,4 @@
+# PYRAMID — one always-on process: web + Socket.IO + market poller. DB migrates itself on boot.
 modules = ["nodejs-22", "postgresql-16"]
 run = "npm run build && npm start"
 

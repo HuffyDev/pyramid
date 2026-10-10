@@ -44,8 +44,8 @@ export function SuccessDock({ launch, imageUrl, onClose }: { launch: LaunchView;
   };
 
   return (
-    <div className="fixed inset-x-3 bottom-3 z-50 animate-rise sm:inset-x-auto sm:bottom-6 sm:right-6 sm:w-[400px]" role="status">
-      <div className="panel overflow-hidden shadow-gold-lg">
+    <div className="fixed inset-x-3 bottom-3 z-50 animate-rise sm:inset-x-auto sm:bottom-6 sm:right-[84px] sm:w-[400px]" role="status">
+      <div className="panel relative overflow-hidden !bg-night-850 shadow-gold-lg">
         <div className="pointer-events-none absolute -top-20 left-1/2 h-40 w-72 -translate-x-1/2 rounded-full bg-gold/20 blur-3xl" />
         <div className="relative flex items-start justify-between p-4 pb-2">
           <div>

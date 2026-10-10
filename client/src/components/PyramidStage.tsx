@@ -18,7 +18,7 @@ export interface StageHandle {
   highlight(n: number): void;
 }
 
-export const PyramidStage = forwardRef<StageHandle, { className?: string; inset?: { top: number; bottom: number } }>(function PyramidStage({ className = '', inset }, ref) {
+export const PyramidStage = forwardRef<StageHandle, { className?: string; inset?: { top: number; bottom: number }; controlsClass?: string; onZoomed?: (z: boolean) => void }>(function PyramidStage({ className = '', inset, controlsClass = 'bottom-4 sm:bottom-6', onZoomed }, ref) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const r = useRef<PyramidRenderer | null>(null);
   const { bricks } = usePyramid();
@@ -29,6 +29,8 @@ export const PyramidStage = forwardRef<StageHandle, { className?: string; inset?
   const [zoomed, setZoomed] = useState(false);
   const [hint, setHint] = useState<string | null>(null);
   const hintT = useRef<number>();
+  const zoomCb = useRef(onZoomed);
+  zoomCb.current = onZoomed;
 
   useEffect(() => {
     const c = canvasRef.current!;
@@ -37,7 +39,10 @@ export const PyramidStage = forwardRef<StageHandle, { className?: string; inset?
       inset,
       onHover: (p) => setHover(p),
       onSelect: (p) => setPinned(p),
-      onZoomed: setZoomed,
+      onZoomed: (z) => {
+        setZoomed(z);
+        zoomCb.current?.(z);
+      },
       onHint: (m) => {
         setHint(m);
         window.clearTimeout(hintT.current);
@@ -87,7 +92,7 @@ export const PyramidStage = forwardRef<StageHandle, { className?: string; inset?
         />
       )}
 
-      <div className="absolute bottom-4 right-4 z-10 flex flex-col overflow-hidden rounded-xl border border-sand-50/10 bg-night-900/70 backdrop-blur-md sm:bottom-6 sm:right-6">
+      <div className={`absolute right-4 z-10 flex-col overflow-hidden rounded-xl border border-sand-50/10 bg-night-900/70 backdrop-blur-md sm:right-6 ${controlsClass} ${zoomed ? 'flex' : 'hidden md:flex'}`}>
         <button className="grid h-10 w-10 place-items-center text-sand-200 transition hover:bg-sand-50/10 hover:text-sand-50" onClick={() => r.current?.zoomBy(1.6)} aria-label="Zoom in">
           <Icon name="plus" />
         </button>
