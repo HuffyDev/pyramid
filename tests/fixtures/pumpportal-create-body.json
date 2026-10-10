@@ -1,0 +1,11 @@
+{
+  "publicKey": "CREATOR",
+  "action": "create",
+  "tokenMetadata": { "name": "Sand Cat", "symbol": "SCAT", "uri": "https://ipfs.io/ipfs/bafkreifixture" },
+  "mint": "MINT",
+  "denominatedInSol": "true",
+  "amount": 0.5,
+  "slippage": 10,
+  "priorityFee": 0.0005,
+  "pool": "pump"
+}

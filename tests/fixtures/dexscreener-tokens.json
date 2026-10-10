@@ -1,0 +1,5 @@
+[
+  { "chainId": "solana", "dexId": "pumpfun", "baseToken": { "address": "MINT_A" }, "priceUsd": "0.00012", "marketCap": 120000, "fdv": 120000, "liquidity": { "usd": 0 }, "priceChange": { "h24": 12.5 } },
+  { "chainId": "solana", "dexId": "pumpswap", "baseToken": { "address": "MINT_A" }, "priceUsd": "0.00013", "marketCap": 130000, "liquidity": { "usd": 50000 }, "priceChange": { "h24": 14 } },
+  { "chainId": "solana", "dexId": "pumpfun", "baseToken": { "address": "MINT_B" }, "priceUsd": "0.000004", "fdv": 4200 }
+]
