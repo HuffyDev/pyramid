@@ -124,4 +124,6 @@ export interface PublicConfig {
   pyramidTelegram: string | null;
   siteUrl: string | null;
   deadMcapUsd: number;
+  /** set when launches are temporarily refused (e.g. database unreachable); the reason */
+  launchesPaused: string | null;
 }

@@ -3,6 +3,7 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import type { Env } from '../env.js';
 import type { Runtime } from '../runtime.js';
+import type { DbStatus } from '../db/connect.js';
 import { createLimiter } from '../lib/rateLimit.js';
 
 /** Constant-time bearer check (same scheme as quant's admin). Admin is off when ADMIN_TOKEN is unset. */
@@ -25,8 +26,10 @@ const settingBody = z.discriminatedUnion('key', [
 
 const hideBody = z.object({ ref: z.string().trim().min(1), hidden: z.boolean() });
 
-export async function adminRoutes(app: FastifyInstance, opts: { env: Env; runtime: Runtime }) {
-  const { env, runtime } = opts;
+export async function adminRoutes(app: FastifyInstance, opts: { env: Env; runtime: Runtime; db?: { status: DbStatus } }) {
+  const { env, runtime, db } = opts;
+  // settings written while the database is down would live only in memory and be overwritten when it returns
+  const dbDown = () => !!db && (db.status.state === 'connecting' || db.status.state === 'failed');
   const { pyramid } = runtime;
   const limit = createLimiter();
 
@@ -45,6 +48,7 @@ export async function adminRoutes(app: FastifyInstance, opts: { env: Env; runtim
   app.get('/status', async () => ({
     settings: { PYRAMID_MINT: env.PYRAMID_MINT || null, DRY_RUN: env.DRY_RUN, SIM_MODE: env.SIM_MODE },
     heliusConfigured: !!env.HELIUS_RPC_URL,
+    db: db ? { state: db.status.state, error: db.status.error, hint: db.status.hint, attempts: db.status.attempts } : { state: 'none', error: null, hint: null, attempts: 0 },
     bricks: pyramid.count(),
     hidden: pyramid.all().filter((b) => b.hidden).map((b) => ({ n: b.n, mint: b.mint, name: b.name, ticker: b.ticker })),
   }));
@@ -62,6 +66,7 @@ export async function adminRoutes(app: FastifyInstance, opts: { env: Env; runtim
     const p = settingBody.safeParse(req.body);
     if (!p.success) return reply.code(400).send({ error: p.error.issues[0]?.message ?? 'invalid' });
     const { key, value } = p.data;
+    if (dbDown()) return reply.code(503).send({ error: 'Database unreachable — settings would not be saved. Fix DATABASE_URL first.' });
     if (key === 'DRY_RUN' && value === false && !env.HELIUS_RPC_URL) return reply.code(400).send({ error: 'Set HELIUS_RPC_URL before turning DRY_RUN off.' });
     await runtime.set(key, typeof value === 'boolean' ? String(value) : (value ?? null));
     return { ok: true, settings: { PYRAMID_MINT: env.PYRAMID_MINT || null, DRY_RUN: env.DRY_RUN, SIM_MODE: env.SIM_MODE } };
@@ -72,6 +77,7 @@ export async function adminRoutes(app: FastifyInstance, opts: { env: Env; runtim
     if (!p.success) return reply.code(400).send({ error: 'ref (brick #, or mint) and hidden required' });
     const b = resolve(p.data.ref);
     if (!b) return reply.code(404).send({ error: 'Brick not found' });
+    if (dbDown() && !b.sim) return reply.code(503).send({ error: 'Database unreachable — the hide would not be saved.' });
     const r = await pyramid.setHidden(b.mint, p.data.hidden);
     return { ok: true, brick: { n: r!.n, mint: r!.mint, hidden: r!.hidden } };
   });

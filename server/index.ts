@@ -1,31 +1,30 @@
 import { existsSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import pg from 'pg';
 import { Server as IOServer } from 'socket.io';
 import { loadEnv } from './env.js';
 import { buildApp } from './app.js';
-import { memoryStore, pgStore, type Store } from './db/store.js';
-import { runMigrations } from './db/migrate.js';
+import { memoryStore } from './db/store.js';
+import { createDbConnector, switchableStore } from './db/connect.js';
+
+// a stray rejection must never take the whole site down; log it and keep serving
+process.on('unhandledRejection', (e) => console.error('[unhandledRejection]', e));
 
 const env = loadEnv();
 mkdirSync(env.MEDIA_DIR, { recursive: true });
 
-let store: Store;
-if (env.DATABASE_URL) {
-  const pool = new pg.Pool({ connectionString: env.DATABASE_URL, max: 10 });
-  await runMigrations(pool); // idempotent; baselines a hand-made schema
-  store = pgStore(pool);
-} else {
-  console.warn('[db] DATABASE_URL not set — using in-memory store (data is lost on restart)');
-  store = memoryStore();
-}
+// Serve from memory until Postgres answers; the connector swaps the real store in (and retries forever).
+const store = switchableStore(memoryStore());
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 // dev (tsx): server/ → ../dist/client ; prod: dist/server/server/ → ../../client
 const clientDir = [path.resolve(here, '../../client'), path.resolve(here, '../dist/client')].find((d) => existsSync(path.join(d, 'index.html'))) ?? null;
 
-const { app, runtime } = await buildApp({ env, store, clientDir });
+let onDbReady: () => Promise<void> = async () => {};
+let onDbStatus: () => void = () => {};
+const db = createDbConnector({ url: env.DATABASE_URL, store, onReady: () => onDbReady(), onStatus: () => onDbStatus() });
+
+const { app, runtime } = await buildApp({ env, store, clientDir, db });
 await app.ready();
 
 // live pushes: new bricks, market ticks, hides, config changes (pattern from quant)
@@ -35,15 +34,25 @@ const io = new IOServer(app.server, {
   perMessageDeflate: { threshold: 1024 },
 });
 runtime.attach((channel, payload) => io.emit(channel, payload));
+onDbStatus = () => io.emit('config', null); // clients refetch config: launches paused / resumed
 
-await runtime.start();
+// listen first: the site is up even if the database is not
 await app.listen({ port: env.PORT, host: env.HOST });
-app.log.info(`PYRAMID on :${env.PORT} — DRY_RUN=${env.DRY_RUN} SIM=${env.SIM_MODE} store=${store.kind} bricks=${runtime.pyramid.count()}`);
+await runtime.start();
+
+// the database coming online (now or after retries) reloads settings and every brick from Postgres
+onDbReady = async () => {
+  await runtime.reload().catch((e) => app.log.error(e, '[db] reload after connect failed'));
+};
+await db.start();
+
+app.log.info(`PYRAMID on :${env.PORT} — DRY_RUN=${env.DRY_RUN} SIM=${env.SIM_MODE} store=${store.kind} db=${db.status.state} bricks=${runtime.pyramid.count()}`);
 
 const shutdown = async () => {
   runtime.stop();
   io.close();
   await app.close();
+  await db.stop();
   process.exit(0);
 };
 process.on('SIGTERM', shutdown);

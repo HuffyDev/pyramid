@@ -110,7 +110,7 @@ function LaunchSheet({ onClose, onLanded }: { onClose: () => void; onLanded: (l:
   const [submitted, setSubmitted] = useState(false);
   const { publicKey } = useWallet();
   const { open: openWallet } = useWalletModal();
-  const { dryRun, mockMode } = useConfig();
+  const { dryRun, mockMode, launchesPaused } = useConfig();
   const { bricks } = usePyramid();
   const { state, run, reset, busy } = useLaunch();
   const scroller = useRef<HTMLDivElement>(null);
@@ -378,11 +378,15 @@ function LaunchSheet({ onClose, onLanded }: { onClose: () => void; onLanded: (l:
                 </div>
               </div>
               <div className="ml-auto flex flex-col items-end">
-                <button className="btn-gold min-w-[200px] py-3.5 text-[15px]" onClick={submit} disabled={busy}>
+                <button className="btn-gold min-w-[200px] py-3.5 text-[15px]" onClick={submit} disabled={busy || !!launchesPaused}>
                   <Icon name={publicKey ? 'pyramid' : 'wallet'} />
                   {cta}
                 </button>
-                {submitted && !valid && <span className="mt-1.5 text-xs text-bad">fix the highlighted fields first</span>}
+                {launchesPaused ? (
+                  <span className="mt-1.5 max-w-[320px] text-right text-xs text-bad">{launchesPaused}</span>
+                ) : (
+                  submitted && !valid && <span className="mt-1.5 text-xs text-bad">fix the highlighted fields first</span>
+                )}
               </div>
             </div>
           )}

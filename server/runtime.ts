@@ -65,11 +65,17 @@ export function createRuntime(opts: { env: Env; store: Store; fetchImpl?: FetchL
     if (key === 'SIM_MODE') env.SIM_MODE = value == null ? env.SIM_MODE : truthy(value);
   }
 
-  async function start() {
+  /** (re)apply saved settings and rebuild the pyramid from the store — at boot, and when the database comes online */
+  async function reload() {
     const saved = await store.getSettings();
     for (const k of RUNTIME_KEYS) if (saved[k] != null) await applySetting(k, saved[k]);
     startSim();
     await pyramid.load();
+    broadcast('config', null);
+  }
+
+  async function start() {
+    await reload();
     const poll = () => pyramid.pollMarkets().catch((e) => log(`[market] ${(e as Error).message}`));
     timers.push(setInterval(poll, env.MARKET_POLL_MS));
     void poll();
@@ -87,6 +93,7 @@ export function createRuntime(opts: { env: Env; store: Store; fetchImpl?: FetchL
   return {
     pyramid,
     start,
+    reload,
     set,
     get sim() {
       return sim;

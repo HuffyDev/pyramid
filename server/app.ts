@@ -13,6 +13,7 @@ import { sniffImage } from './lib/image.js';
 import { createLimiter } from './lib/rateLimit.js';
 import { createRuntime, type Runtime } from './runtime.js';
 import { adminRoutes } from './routes/admin.js';
+import type { DbStatus } from './db/connect.js';
 
 export interface AppDeps {
   env: Env;
@@ -21,9 +22,11 @@ export interface AppDeps {
   clientDir?: string | null;
   logger?: boolean;
   runtime?: Runtime;
+  /** live database status; omitted = no database configured (tests, local UI work) */
+  db?: { status: DbStatus };
 }
 
-export async function buildApp({ env, store, fetchImpl, clientDir, logger = true, runtime: rt }: AppDeps): Promise<{ app: FastifyInstance; runtime: Runtime }> {
+export async function buildApp({ env, store, fetchImpl, clientDir, logger = true, runtime: rt, db }: AppDeps): Promise<{ app: FastifyInstance; runtime: Runtime }> {
   const app = Fastify({ logger: logger ? { level: 'info' } : false, disableRequestLogging: true, bodyLimit: 2 * 1024 * 1024, trustProxy: true });
   const runtime = rt ?? createRuntime({ env, store, fetchImpl, log: (m) => app.log.info(m) });
   const { pyramid } = runtime;
@@ -49,9 +52,33 @@ export async function buildApp({ env, store, fetchImpl, clientDir, logger = true
   });
 
   const origin = (req: FastifyRequest) => `${req.protocol}://${req.host}`;
+
+  /**
+   * With a database configured, launches wait for it: a real launch recorded only in memory
+   * would vanish from the pyramid on the next restart. Dry runs may continue in memory once
+   * the first connection attempt has failed (they are practice bricks anyway).
+   */
+  const launchesPaused = () => {
+    const st = db?.status.state;
+    if (!st || st === 'none' || st === 'ready') return null;
+    if (st === 'connecting') return 'Warming up — try again in a few seconds.';
+    return env.DRY_RUN ? null : 'Launches are paused: the database is unreachable. Nothing was sent.';
+  };
+  const ensureLaunchesOpen = () => {
+    const why = launchesPaused();
+    if (why) throw new LaunchError(why, 503, 'launches_paused');
+  };
   const withBrick = (l: Awaited<ReturnType<Store['getLaunch']>>): LaunchView | null => (l ? { ...l, brickNo: pyramid.get(l.mint)?.n ?? null } : null);
 
-  app.get('/api/health', async () => ({ ok: true, store: store.kind, dryRun: env.DRY_RUN, sim: env.SIM_MODE, bricks: pyramid.count() }));
+  // always 200 while the process is up, so the host does not restart-loop over a database problem
+  app.get('/api/health', async () => ({
+    ok: true,
+    store: store.kind,
+    db: db?.status.state ?? 'none', // details (errors, hints) only in /admin: they can name hosts or users
+    dryRun: env.DRY_RUN,
+    sim: env.SIM_MODE,
+    bricks: pyramid.count(),
+  }));
 
   app.get('/api/config', async (): Promise<PublicConfig> => ({
     dryRun: env.DRY_RUN,
@@ -62,6 +89,7 @@ export async function buildApp({ env, store, fetchImpl, clientDir, logger = true
     pyramidTelegram: env.PYRAMID_TELEGRAM_URL || null,
     siteUrl: env.PUBLIC_SITE_URL || null,
     deadMcapUsd: env.DEAD_MCAP_USD,
+    launchesPaused: launchesPaused(),
   }));
 
   // ── pyramid ────────────────────────────────────────────────────────────────
@@ -102,6 +130,7 @@ export async function buildApp({ env, store, fetchImpl, clientDir, logger = true
 
   app.post('/api/upload', async (req) => {
     guard(req, 'upload', 10);
+    ensureLaunchesOpen();
     const fields: Record<string, string> = {};
     let image: { bytes: Buffer; filename: string } | null = null;
     for await (const part of req.parts()) {
@@ -127,11 +156,13 @@ export async function buildApp({ env, store, fetchImpl, clientDir, logger = true
 
   app.post('/api/launch/build', async (req) => {
     guard(req, 'build', 20);
+    ensureLaunchesOpen();
     return launcher.build(req.body);
   });
 
   app.post('/api/launch/send', async (req) => {
     guard(req, 'send', 20);
+    ensureLaunchesOpen();
     const parsed = sendRequestSchema.safeParse(req.body);
     if (!parsed.success) throw new LaunchError('Invalid request.');
     const r = await launcher.send(parsed.data);
@@ -144,7 +175,7 @@ export async function buildApp({ env, store, fetchImpl, clientDir, logger = true
     return { launch: l };
   });
 
-  await app.register(adminRoutes, { prefix: '/api/admin', env, runtime });
+  await app.register(adminRoutes, { prefix: '/api/admin', env, runtime, db });
 
   // dry-run local media
   const mediaDir = path.resolve(env.MEDIA_DIR);

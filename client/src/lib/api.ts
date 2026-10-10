@@ -59,6 +59,7 @@ const adminHeaders = (token: string, body?: unknown): RequestInit => ({
 export interface AdminStatus {
   settings: { PYRAMID_MINT: string | null; DRY_RUN: boolean; SIM_MODE: boolean };
   heliusConfigured: boolean;
+  db: { state: 'none' | 'connecting' | 'ready' | 'failed'; error: string | null; hint: string | null; attempts: number };
   bricks: number;
   hidden: { n: number; mint: string; name: string; ticker: string }[];
 }

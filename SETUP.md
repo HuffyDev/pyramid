@@ -13,11 +13,23 @@ No platform fee. No bundling, no sniping.
 3. Add the secrets below in the **Secrets** tab. At minimum: `HELIUS_RPC_URL`, `ADMIN_TOKEN`.
 4. Run `npm run check:live`. Every check should pass **before** you turn `DRY_RUN` off.
 
+### Published site shows "Internal Server Error" / won't open
+
+Almost always the database. Replit's workspace database (host `helium`) is **development only** — a published app cannot
+reach it. If the deployment inherits that `DATABASE_URL`, older builds crashed on boot with `ENOTFOUND helium`.
+
+Since this fix the server never crashes over the database: it starts, serves the site from memory, retries the database in
+the background, and pauses real launches until Postgres answers (dry runs keep working). To fix it properly:
+
+1. Replit → **Publishing → Adjust settings** → add / create a **production database** (this gives the deployment its own `DATABASE_URL`).
+2. **Republish**.
+3. Open `/api/health` — `"db":"ready"` means it's connected. `/admin` shows the exact database error and a hint if not.
+
 ## Environment variables
 
 | Var | Required | Default | What it does |
 |---|---|---|---|
-| `DATABASE_URL` | recommended | — | Postgres. Without it an in-memory store is used (bricks are lost on restart). |
+| `DATABASE_URL` | recommended | — | Postgres. Without it an in-memory store is used (bricks are lost on restart). If it is set but unreachable the site still runs (from memory), retries in the background, and pauses real launches until it connects. On Replit, published apps need a production database (not the dev `helium` one). |
 | `HELIUS_RPC_URL` | for live | — | Helius RPC URL incl. API key. Simulates (dry run) and sends (live). Never sent to the browser. |
 | `DRY_RUN` | no | `true` | `true`: build + simulate, never broadcast. Only `false`/`0`/`off`/`no` turns it off. Admin can flip it at runtime. |
 | `MOCK_FALLBACK` | no | `true` | Dry run only: if PumpPortal / IPFS / RPC are unreachable, run a local mock (wallet signs a message, no tx). Ignored when `DRY_RUN=false`. |

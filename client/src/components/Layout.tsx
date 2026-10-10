@@ -84,7 +84,13 @@ function Header() {
 }
 
 function DryRunBar() {
-  const { dryRun, simMode } = useConfig();
+  const { dryRun, simMode, launchesPaused } = useConfig();
+  if (launchesPaused)
+    return (
+      <div className="relative z-40 border-b border-bad/30 bg-bad/10 px-4 py-1.5 text-center font-mono text-[10.5px] uppercase tracking-[0.14em] text-bad sm:text-[11px]">
+        {launchesPaused}
+      </div>
+    );
   if (!dryRun && !simMode) return null;
   return (
     <div className="relative z-40 border-b border-gold/20 bg-gold/[0.07] px-4 py-1.5 text-center font-mono text-[10.5px] uppercase tracking-[0.16em] text-gold-hot sm:text-[11px]">

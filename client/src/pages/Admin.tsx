@@ -111,6 +111,16 @@ export default function Admin() {
         </button>
       </div>
 
+      {status.db.state !== 'ready' && (
+        <div className={`mt-6 rounded-xl border px-4 py-3 text-sm ${status.db.state === 'none' ? 'border-gold/30 bg-gold/10 text-gold-hot' : 'border-bad/30 bg-bad/10 text-bad'}`}>
+          <div className="font-mono text-[11px] uppercase tracking-widest">database · {status.db.state}{status.db.attempts > 1 ? ` · ${status.db.attempts} attempts` : ''}</div>
+          <p className="mt-1">
+            {status.db.state === 'none' ? 'DATABASE_URL is not set: bricks live in memory and are lost on restart.' : (status.db.hint ?? 'Connecting…')}
+          </p>
+          {status.db.error && <p className="mt-1 font-mono text-[11px] opacity-80">{status.db.error}</p>}
+        </div>
+      )}
+
       {(msg || err) && <p className={`mt-6 rounded-xl border px-4 py-2.5 text-sm ${err ? 'border-bad/30 bg-bad/10 text-bad' : 'border-ok/30 bg-ok/10 text-ok'}`}>{err ?? msg}</p>}
 
       <section className="panel mt-8 divide-y divide-sand-50/[0.06]">

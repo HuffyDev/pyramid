@@ -12,6 +12,7 @@ const fallback: PublicConfig = {
   pyramidTelegram: null,
   siteUrl: null,
   deadMcapUsd: 6000,
+  launchesPaused: null,
 };
 const Ctx = createContext<PublicConfig>(fallback);
 
