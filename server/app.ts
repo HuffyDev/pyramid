@@ -15,6 +15,13 @@ import { createRuntime, type Runtime } from './runtime.js';
 import { adminRoutes } from './routes/admin.js';
 import type { DbStatus } from './db/connect.js';
 
+const DB_CONN_CODES = new Set(['ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'ETIMEDOUT', 'ECONNRESET', 'EPIPE', '57P01', '57P02', '57P03', '08000', '08001', '08003', '08006']);
+/** connection-level Postgres failures (not query bugs): answered as 503 instead of a generic 500 */
+export function isDbConnectionError(e: { code?: string; message?: string }): boolean {
+  if (e.code && DB_CONN_CODES.has(e.code)) return true;
+  return /Connection terminated|connection timeout|timeout exceeded when trying to connect|Client has encountered a connection error|Query read timeout/i.test(e.message ?? '');
+}
+
 export interface AppDeps {
   env: Env;
   store: Store;
@@ -37,6 +44,11 @@ export async function buildApp({ env, store, fetchImpl, clientDir, logger = true
     log: (m, x) => app.log.info({ x }, m),
     onPlaced: (l) => pyramid.placeLaunch(l),
   });
+  // finish launches left 'sent' (missed confirmations, restarts, DB blips): on every reload and every minute
+  runtime.setReconciler(async () => {
+    const r = await launcher.reconcile();
+    if (r.placed || r.failed) app.log.info(`[reconcile] placed ${r.placed}, failed ${r.failed}, pending ${r.pending}`);
+  });
   const limit = createLimiter();
   const guard = (req: FastifyRequest, bucket: string, max: number, windowMs = 60_000) => {
     if (!limit(`${req.ip}:${bucket}`, max, windowMs)) throw new LaunchError('Slow down — too many requests.', 429, 'rate_limited');
@@ -46,6 +58,10 @@ export async function buildApp({ env, store, fetchImpl, clientDir, logger = true
 
   app.setErrorHandler((err, _req, reply) => {
     const e = err as Error & { status?: number; code?: string; statusCode?: number };
+    if (isDbConnectionError(e)) {
+      app.log.warn(`[db] request failed, database unavailable: ${e.message}`);
+      return reply.status(503).send({ error: 'Database temporarily unavailable. Try again in a moment.', code: 'db_unavailable' });
+    }
     const status = e instanceof LaunchError ? e.status : e.statusCode && e.statusCode < 500 ? e.statusCode : 500;
     if (status >= 500) app.log.error(err);
     reply.status(status).send({ error: status >= 500 && !(e instanceof LaunchError) ? 'Internal error' : e.message, code: e.code ?? 'error' });
@@ -54,15 +70,18 @@ export async function buildApp({ env, store, fetchImpl, clientDir, logger = true
   const origin = (req: FastifyRequest) => `${req.protocol}://${req.host}`;
 
   /**
-   * With a database configured, launches wait for it: a real launch recorded only in memory
-   * would vanish from the pyramid on the next restart. Dry runs may continue in memory once
-   * the first connection attempt has failed (they are practice bricks anyway).
+   * With a database configured, every launch waits for it: a launch recorded only in memory would
+   * vanish on the next restart, and the admin-saved mode (DRY_RUN) lives in the database too.
+   * Live launches without any database are refused outright.
    */
   const launchesPaused = () => {
-    const st = db?.status.state;
-    if (!st || st === 'none' || st === 'ready') return null;
+    if (!db) return null; // not wired (unit tests)
+    const st = db.status.state;
+    if (st === 'ready') return null;
+    if (st === 'none') return env.DRY_RUN ? null : 'Live launches need a database (DATABASE_URL). Nothing was sent.';
     if (st === 'connecting') return 'Warming up — try again in a few seconds.';
-    return env.DRY_RUN ? null : 'Launches are paused: the database is unreachable. Nothing was sent.';
+    // fail closed: while the database is unreachable even the saved mode (dry run vs live) is unknown
+    return 'Launches are paused: the database is unreachable. Nothing was sent.';
   };
   const ensureLaunchesOpen = () => {
     const why = launchesPaused();

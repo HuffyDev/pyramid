@@ -66,18 +66,23 @@ export function createRuntime(opts: { env: Env; store: Store; fetchImpl?: FetchL
   }
 
   /** (re)apply saved settings and rebuild the pyramid from the store — at boot, and when the database comes online */
+  let reconciler: (() => Promise<void>) | null = null;
+  const reconcile = () => (reconciler ? reconciler().catch((e) => log(`[reconcile] ${(e as Error).message}`)) : Promise.resolve());
+
   async function reload() {
     const saved = await store.getSettings();
     for (const k of RUNTIME_KEYS) if (saved[k] != null) await applySetting(k, saved[k]);
     startSim();
     await pyramid.load();
     broadcast('config', null);
+    await reconcile();
   }
 
   async function start() {
     await reload();
     const poll = () => pyramid.pollMarkets().catch((e) => log(`[market] ${(e as Error).message}`));
     timers.push(setInterval(poll, env.MARKET_POLL_MS));
+    timers.push(setInterval(() => void reconcile(), 60_000));
     void poll();
   }
 
@@ -95,6 +100,9 @@ export function createRuntime(opts: { env: Env; store: Store; fetchImpl?: FetchL
     start,
     reload,
     set,
+    setReconciler(f: () => Promise<void>) {
+      reconciler = f;
+    },
     get sim() {
       return sim;
     },

@@ -22,8 +22,8 @@ export class Rpc {
       fetchImpl: this.fetchImpl,
     });
     const json = (await res.json().catch(() => null)) as RpcResponse<T> | null;
-    if (!json) throw new UpstreamError('Helius RPC', `bad JSON (HTTP ${res.status})`);
-    if (json.error) throw new UpstreamError('Helius RPC', json.error.message);
+    if (!json) throw new UpstreamError('Helius RPC', `bad JSON (HTTP ${res.status})`, res.status);
+    if (json.error) throw new UpstreamError('Helius RPC', json.error.message, res.status); // a JSON-RPC answer: definitive
     return json.result as T;
   }
 
@@ -39,6 +39,18 @@ export class Rpc {
       txBase64,
       { encoding: 'base64', skipPreflight: false, preflightCommitment: 'processed', maxRetries: 3 },
     ]);
+  }
+
+  /** one status lookup; history=true searches beyond the recent-status cache (used by the reconciler) */
+  async status(signature: string, history = false): Promise<'confirmed' | 'failed' | 'pending' | 'unknown'> {
+    const r = await this.call<{ value: Array<{ confirmationStatus?: string; err: unknown } | null> }>('getSignatureStatuses', [
+      [signature],
+      { searchTransactionHistory: history },
+    ]);
+    const s = r?.value?.[0];
+    if (!s) return 'unknown';
+    if (s.err) return 'failed';
+    return s.confirmationStatus === 'confirmed' || s.confirmationStatus === 'finalized' ? 'confirmed' : 'pending';
   }
 
   async confirm(signature: string, timeoutMs = 60_000): Promise<'confirmed' | 'failed' | 'timeout'> {

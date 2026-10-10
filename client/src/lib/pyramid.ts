@@ -62,7 +62,8 @@ export function startPyramid() {
   void load();
   socket = io({ transports: ['websocket', 'polling'] });
   socket.on('connect', () => {
-    set({ connected: true });
+    // refetch config too: the server may have restarted (e.g. launches paused → resumed) while we were away
+    set({ connected: true, configRev: state.configRev + 1 });
     if (state.loaded) void load(); // catch up after a reconnect
   });
   socket.on('disconnect', () => set({ connected: false }));

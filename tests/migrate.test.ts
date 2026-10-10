@@ -34,6 +34,30 @@ describe.skipIf(!url)('migrations (postgres)', () => {
     await pool.end();
   });
 
+  it('a migration connection killed mid-run rejects instead of crashing the process', async () => {
+    const pool = await fresh();
+    const holder = new pg.Client({ connectionString: url });
+    await holder.connect();
+    await holder.query('SELECT pg_advisory_lock(727301)'); // makes runMigrations wait inside the lock query
+    const logs: string[] = [];
+    const run = runMigrations(pool, undefined, (m) => logs.push(m));
+    let pid: number | undefined;
+    for (let i = 0; i < 50 && !pid; i++) {
+      await new Promise((r) => setTimeout(r, 50));
+      const { rows } = await holder.query(`SELECT pid FROM pg_stat_activity WHERE query LIKE 'SELECT pg_advisory_lock(727301)%' AND pid <> pg_backend_pid()`);
+      pid = rows[0]?.pid;
+    }
+    expect(pid).toBeTruthy();
+    await holder.query('SELECT pg_terminate_backend($1)', [pid]);
+    await expect(run).rejects.toThrow(/terminat/i);
+    expect(logs.join()).toMatch(/migration connection lost/);
+    await holder.query('SELECT pg_advisory_unlock(727301)');
+    await holder.end();
+    // the pool is still usable afterwards
+    await runMigrations(pool, undefined, quiet);
+    await pool.end();
+  });
+
   it('store works against postgres', async () => {
     const pool = await fresh();
     await runMigrations(pool, undefined, quiet);

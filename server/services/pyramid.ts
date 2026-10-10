@@ -55,10 +55,24 @@ export function createPyramid({ env, store, broadcast = () => {}, markets, sim =
     });
   };
 
+  /** bricks appended while a load() query is in flight; merged back so a reload never drops one */
+  let appendedDuringLoad: BrickView[] | null = null;
+
   async function load() {
-    const real = (await store.listPlaced({ includeSimulated: env.DRY_RUN })).map((l) => ({ ...brickFromLaunch(l), n: 0 }));
+    appendedDuringLoad = [];
+    let real: BrickView[];
+    try {
+      real = (await store.listPlaced({ includeSimulated: env.DRY_RUN })).map((l) => ({ ...brickFromLaunch(l), n: 0 }));
+    } catch (e) {
+      appendedDuringLoad = null;
+      throw e;
+    }
     const synthetic = env.SIM_MODE && simWorld ? simWorld.bricks().map((b) => ({ ...b, n: 0 })) : [];
-    bricks = [...real, ...synthetic].sort((a, b) => a.placedAt.localeCompare(b.placedAt));
+    const next = [...real, ...synthetic];
+    const seen = new Set(next.map((b) => b.mint));
+    for (const b of appendedDuringLoad) if (!seen.has(b.mint) && (!b.sim || env.SIM_MODE) && (!b.dryRun || env.DRY_RUN)) next.push({ ...b, n: 0 });
+    appendedDuringLoad = null;
+    bricks = next.sort((a, b) => a.placedAt.localeCompare(b.placedAt));
     index();
     log(`[pyramid] ${bricks.length} bricks (${real.length} launched, ${synthetic.length} sim)`);
     broadcast('reload', { count: bricks.length });
@@ -69,6 +83,7 @@ export function createPyramid({ env, store, broadcast = () => {}, markets, sim =
     if (existing) return existing;
     const brick: BrickView = { ...b, n: bricks.length + 1 };
     bricks.push(brick);
+    appendedDuringLoad?.push(brick);
     byMint.set(brick.mint, brick);
     broadcast('brick', publicBrick(brick));
     return brick;

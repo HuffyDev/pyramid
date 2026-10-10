@@ -26,6 +26,8 @@ export interface Store {
   /** every placed launch, oldest first (brick order) */
   listPlaced(opts: { includeSimulated: boolean }): Promise<LaunchRecord[]>;
   setHidden(mint: string, hidden: boolean): Promise<LaunchRecord | null>;
+  /** launches in a given status, oldest first (the reconciler reads 'sent') */
+  listByStatus(status: LaunchStatus, limit?: number): Promise<LaunchRecord[]>;
   updateMarket(rows: MarketPatch[]): Promise<void>;
   getSettings(): Promise<Record<string, string>>;
   setSetting(key: string, value: string | null): Promise<void>;
@@ -89,6 +91,10 @@ export function pgStore(pool: Pool): Store {
           ),
         )
         .orderBy(asc(launches.placedAt), asc(launches.createdAt));
+      return rows.map(toRecord);
+    },
+    async listByStatus(status, limit = 200) {
+      const rows = await db.select().from(launches).where(eq(launches.status, status)).orderBy(asc(launches.createdAt)).limit(limit);
       return rows.map(toRecord);
     },
     async setHidden(mint, hidden) {
@@ -163,6 +169,12 @@ export function memoryStore(): Store {
       return [...rows.values()]
         .filter((r) => r.placedAt && (r.status === 'confirmed' || (includeSimulated && r.status === 'simulated')))
         .sort((a, b) => a.placedAt!.localeCompare(b.placedAt!) || a.createdAt.localeCompare(b.createdAt));
+    },
+    async listByStatus(status, limit = 200) {
+      return [...rows.values()]
+        .filter((r) => r.status === status)
+        .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+        .slice(0, limit);
     },
     async setHidden(mint, hidden) {
       const r = byMint(mint);

@@ -40,10 +40,9 @@ onDbStatus = () => io.emit('config', null); // clients refetch config: launches 
 await app.listen({ port: env.PORT, host: env.HOST });
 await runtime.start();
 
-// the database coming online (now or after retries) reloads settings and every brick from Postgres
-onDbReady = async () => {
-  await runtime.reload().catch((e) => app.log.error(e, '[db] reload after connect failed'));
-};
+// the database coming online (now, after retries, or after an outage) reloads settings, every brick and
+// pending launches from Postgres. A failed reload keeps the db 'failed' (launches paused) and is retried.
+onDbReady = () => runtime.reload();
 await db.start();
 
 app.log.info(`PYRAMID on :${env.PORT} — DRY_RUN=${env.DRY_RUN} SIM=${env.SIM_MODE} store=${store.kind} db=${db.status.state} bricks=${runtime.pyramid.count()}`);

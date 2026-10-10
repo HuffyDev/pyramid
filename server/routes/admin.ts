@@ -67,6 +67,8 @@ export async function adminRoutes(app: FastifyInstance, opts: { env: Env; runtim
     if (!p.success) return reply.code(400).send({ error: p.error.issues[0]?.message ?? 'invalid' });
     const { key, value } = p.data;
     if (dbDown()) return reply.code(503).send({ error: 'Database unreachable — settings would not be saved. Fix DATABASE_URL first.' });
+    if (key === 'DRY_RUN' && value === false && db?.status.state === 'none')
+      return reply.code(400).send({ error: 'Set DATABASE_URL before turning DRY_RUN off — live bricks must be stored.' });
     if (key === 'DRY_RUN' && value === false && !env.HELIUS_RPC_URL) return reply.code(400).send({ error: 'Set HELIUS_RPC_URL before turning DRY_RUN off.' });
     await runtime.set(key, typeof value === 'boolean' ? String(value) : (value ?? null));
     return { ok: true, settings: { PYRAMID_MINT: env.PYRAMID_MINT || null, DRY_RUN: env.DRY_RUN, SIM_MODE: env.SIM_MODE } };

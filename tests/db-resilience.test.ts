@@ -64,20 +64,78 @@ describe('db connector', () => {
     await c.stop();
   });
 
-  it('a failing reload after connect does not flip the state back to failed', async () => {
+  it("'ready' only after the reload succeeds; a failed reload keeps launches paused and is retried", async () => {
     const store = switchableStore(memoryStore());
+    let reloads = 0;
     const c = createDbConnector({
       url: 'postgres://x',
       store,
       log: () => {},
+      retryMs: [5],
       makePool: fakePool,
       migrate: async () => {},
       onReady: () => {
-        throw new Error('boom');
+        if (++reloads === 1) throw new Error('boom');
       },
     });
     await c.start();
+    expect(c.status.state).toBe('failed');
+    expect(c.status.hint).toMatch(/loading from the database failed/);
+    await new Promise((r) => setTimeout(r, 60));
     expect(c.status.state).toBe('ready');
+    expect(reloads).toBe(2);
+    await c.stop();
+  });
+
+  it('a hung migration times out instead of leaving the site stuck in connecting', async () => {
+    const c = createDbConnector({
+      url: 'postgres://x',
+      store: switchableStore(memoryStore()),
+      log: () => {},
+      makePool: fakePool,
+      attemptTimeoutMs: 30,
+      retryMs: [60_000],
+      migrate: () => new Promise(() => {}),
+    });
+    await c.start();
+    expect(c.status).toMatchObject({ state: 'failed' });
+    expect(c.status.error).toMatch(/timed out/);
+    await c.stop();
+  });
+
+  it('notices the database dropping after ready (launches pause) and coming back (reload, reopen)', async () => {
+    let up = true;
+    const pool = Object.assign(new EventEmitter(), {
+      end: async () => {},
+      query: async () => {
+        if (!up) throw Object.assign(new Error('connect ECONNREFUSED 10.0.0.1:5432'), { code: 'ECONNREFUSED' });
+        return { rows: [] };
+      },
+    }) as unknown as pg.Pool;
+    let reloads = 0;
+    const states: string[] = [];
+    const c = createDbConnector({
+      url: 'postgres://x',
+      store: switchableStore(memoryStore()),
+      log: () => {},
+      makePool: () => pool,
+      migrate: async () => {},
+      probeMs: 10,
+      onReady: () => {
+        reloads++;
+      },
+      onStatus: (s) => states.push(s.state),
+    });
+    await c.start();
+    expect(c.status.state).toBe('ready');
+    up = false;
+    await new Promise((r) => setTimeout(r, 40));
+    expect(c.status.state).toBe('failed');
+    up = true;
+    await new Promise((r) => setTimeout(r, 40));
+    expect(c.status.state).toBe('ready');
+    expect(reloads).toBe(2);
+    expect(states).toEqual(['ready', 'failed', 'ready']);
     await c.stop();
   });
 
@@ -127,11 +185,33 @@ describe('launch gating while the database is down', () => {
     expect((await app.inject({ method: 'POST', url: '/api/launch/send', payload: { launchId: crypto.randomUUID() } })).statusCode).toBe(503);
   });
 
-  it('dry runs may continue in memory once the first attempt failed', async () => {
+  it('dry runs pause too while the database is down (the saved mode itself is unknown)', async () => {
     const { app } = await make('failed');
-    const r = await app.inject({ method: 'POST', url: '/api/launch/build', payload: buildReq() });
-    expect(r.statusCode).toBe(200);
-    expect((await app.inject({ url: '/api/config' })).json().launchesPaused).toBe(null);
+    expect((await app.inject({ method: 'POST', url: '/api/launch/build', payload: buildReq() })).statusCode).toBe(503);
+    expect((await app.inject({ url: '/api/config' })).json().launchesPaused).toMatch(/paused/);
+  });
+
+  it('without any database: dry runs work, live launches are refused, and admin cannot go live', async () => {
+    const dry = await make('none');
+    expect((await dry.app.inject({ method: 'POST', url: '/api/launch/build', payload: buildReq() })).statusCode).toBe(200);
+    const auth = { authorization: `Bearer ${'t'.repeat(30)}` };
+    const r = await dry.app.inject({ method: 'POST', url: '/api/admin/settings', headers: auth, payload: { key: 'DRY_RUN', value: false } });
+    expect(r.statusCode).toBe(400);
+    expect(r.json().error).toMatch(/DATABASE_URL/);
+    const live = await make('none', { DRY_RUN: 'false' });
+    expect((await live.app.inject({ method: 'POST', url: '/api/launch/build', payload: buildReq() })).statusCode).toBe(503);
+  });
+
+  it('database connection errors answer 503, not a generic 500', async () => {
+    const env = testEnv({ MARKET_POLL_MS: '600000' });
+    const base = memoryStore();
+    const store = { ...base, kind: 'memory' as const, getLaunch: async () => { throw Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' }); } };
+    const { app, runtime } = await buildApp({ env, store, logger: false });
+    await runtime.start();
+    apps.push({ close: () => app.close(), stop: runtime.stop });
+    const r = await app.inject({ url: `/api/launch/${crypto.randomUUID()}` });
+    expect(r.statusCode).toBe(503);
+    expect(r.json().code).toBe('db_unavailable');
   });
 
   it('everything waits while the first connection is still in flight', async () => {
@@ -180,6 +260,8 @@ describe('boot (real process)', () => {
       }
       expect(child.exitCode, out).toBe(null);
       expect(health).toMatchObject({ ok: true, db: 'failed' });
+      const cfg = await (await fetch(`http://127.0.0.1:${port}/api/config`)).json();
+      expect(cfg.launchesPaused).toMatch(/paused/);
       expect(out).toMatch(/production database/);
     } finally {
       child.kill('SIGTERM');

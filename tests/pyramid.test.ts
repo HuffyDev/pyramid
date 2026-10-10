@@ -177,6 +177,20 @@ describe('pyramid index', () => {
     expect(p.get('m')!.belowSince).toBe(null);
   });
 
+  it('a brick placed while a reload is in flight is not dropped', async () => {
+    const base = memoryStore();
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => (release = r));
+    const store = { ...base, kind: 'memory' as const, listPlaced: async (o: { includeSimulated: boolean }) => (await gate, base.listPlaced(o)) };
+    const p = createPyramid({ env: testEnv(), store });
+    const loading = p.load();
+    p.placeLaunch(launch('late', '2026-10-10T00:05:00Z')); // e.g. a confirm landing mid-reload
+    release();
+    await loading;
+    expect(p.get('late')).toMatchObject({ n: 1 });
+    expect(p.count()).toBe(1);
+  });
+
   it('SIM mode merges synthetic bricks and keeps launching', async () => {
     const sim = createSimWorld({ seedCount: 50, threshold: 6000, seed: 1 });
     const p = createPyramid({ env: testEnv({ SIM_MODE: 'true' }), store: memoryStore(), sim });

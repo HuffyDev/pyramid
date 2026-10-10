@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { VersionedTransaction } from '@solana/web3.js';
+import bs58 from 'bs58';
 import { buildRequestSchema, type LaunchRecord } from '../../shared/launch.js';
 import { checkLaunchFields, filterMessage } from '../../shared/filter.js';
 import { mockAllowed, type Env } from '../env.js';
@@ -46,6 +47,12 @@ export interface SendResult {
 }
 
 const describe = (e: unknown) => (e instanceof Error ? e.message : String(e));
+
+/** a transition that unexpectedly found nothing (row changed underneath us): ask the client to retry instead of returning null */
+function must(l: LaunchRecord | null): LaunchRecord {
+  if (!l) throw new LaunchError('This launch changed while it was being processed. Please retry.', 409, 'launch_conflict');
+  return l;
+}
 
 export function mockSignMessage(l: { launchId: string; ticker: string; mint: string }) {
   return [
@@ -148,9 +155,10 @@ export function createLauncher({ env, store, fetchImpl, log = () => {}, onPlaced
     if (['sent', 'confirmed', 'simulated'].includes(launch.status)) return { launch };
 
     const locked = await store.transition(launch.launchId, ['building', 'failed'], 'sent');
-    if (!locked) return { launch: (await store.getLaunch(launch.launchId))! };
+    if (!locked) return { launch: must(await store.getLaunch(launch.launchId)) };
     const fail = async (msg: string, status = 400): Promise<never> => {
-      await store.transition(launch.launchId, ['sent'], 'failed');
+      // best effort: if the DB is down too, the user should still see the real reason
+      await store.transition(launch.launchId, ['sent'], 'failed').catch((e) => log('[send] could not mark failed', describe(e)));
       throw new LaunchError(msg, status, 'send_failed');
     };
 
@@ -158,7 +166,7 @@ export function createLauncher({ env, store, fetchImpl, log = () => {}, onPlaced
       if (!mockAllowed(env)) return fail('Signed transaction required.');
       if (!raw.mockSignature) return fail('Wallet signature required.');
       const done = await place(launch.launchId, 'simulated', { simulated: true });
-      return { launch: done!, simulation: { logs: [], unitsConsumed: null, skipped: 'mock mode — no transaction was built' } };
+      return { launch: must(done), simulation: { logs: [], unitsConsumed: null, skipped: 'mock mode — no transaction was built' } };
     }
 
     let bytes: Uint8Array;
@@ -174,46 +182,110 @@ export function createLauncher({ env, store, fetchImpl, log = () => {}, onPlaced
     if (env.DRY_RUN) {
       if (!rpc) {
         const done = await place(launch.launchId, 'simulated', { simulated: true });
-        return { launch: done!, simulation: { logs: [], unitsConsumed: null, skipped: 'HELIUS_RPC_URL not set' } };
+        return { launch: must(done), simulation: { logs: [], unitsConsumed: null, skipped: 'HELIUS_RPC_URL not set' } };
       }
       try {
         const sim = await rpc.simulate(raw.signedTx);
         if (sim.value.err) {
           await store.transition(launch.launchId, ['sent'], 'failed');
           return {
-            launch: (await store.getLaunch(launch.launchId))!,
+            launch: must(await store.getLaunch(launch.launchId)),
             simulation: { logs: sim.value.logs ?? [], unitsConsumed: sim.value.unitsConsumed ?? null },
             error: `Simulation failed: ${JSON.stringify(sim.value.err)}`,
           };
         }
         const done = await place(launch.launchId, 'simulated', { simulated: true });
-        return { launch: done!, simulation: { logs: sim.value.logs ?? [], unitsConsumed: sim.value.unitsConsumed ?? null } };
+        return { launch: must(done), simulation: { logs: sim.value.logs ?? [], unitsConsumed: sim.value.unitsConsumed ?? null } };
       } catch (e) {
         if (!mockAllowed(env)) return fail(`Simulation unavailable: ${describe(e)}`, 502);
         const done = await place(launch.launchId, 'simulated', { simulated: true });
-        return { launch: done!, simulation: { logs: [], unitsConsumed: null, skipped: describe(e) } };
+        return { launch: must(done), simulation: { logs: [], unitsConsumed: null, skipped: describe(e) } };
       }
     }
 
     if (!rpc) return fail('HELIUS_RPC_URL is not configured.', 500);
+    // The fee payer's signature IS the transaction id. Record it BEFORE broadcasting, so a coin can never
+    // exist on-chain without a row the reconciler can find (DB blip, crash or redeploy mid-send).
+    const expected = bs58.encode(tx.signatures[0]);
+    let recorded: LaunchRecord | null;
+    try {
+      recorded = await store.transition(launch.launchId, ['sent'], 'sent', { signature: expected });
+    } catch (e) {
+      await store.transition(launch.launchId, ['sent'], 'failed').catch(() => {});
+      throw new LaunchError(`Could not record the launch, nothing was sent: ${describe(e)}`, 503, 'send_failed');
+    }
+    if (!recorded) return { launch: must(await store.getLaunch(launch.launchId)) };
     let signature: string;
     try {
       signature = await rpc.send(raw.signedTx);
     } catch (e) {
-      return fail(e instanceof UpstreamError ? e.message : `Send failed: ${describe(e)}`, 502);
+      // A JSON-RPC error (preflight / simulation rejected, bad blockhash) or a 4xx means it was NOT broadcast.
+      // A timeout, network error or 5xx is ambiguous: the tx may be on its way. Keep it 'sent' with its
+      // signature and let confirm/reconcile decide, instead of marking a possibly-live coin as failed.
+      const definitive = e instanceof UpstreamError && e.status !== undefined && e.status < 500 && e.status !== 429;
+      if (definitive) return fail(e.message, 502);
+      log('[send] ambiguous send error, tracking the signature', describe(e));
+      signature = expected;
     }
-    const sent = await store.transition(launch.launchId, ['sent'], 'sent', { signature });
-    // confirm in the background; client polls GET /api/launch/:id
+    if (signature !== expected) {
+      // should never happen; keep the RPC's answer, but don't fail the user over a bookkeeping write
+      await store.transition(launch.launchId, ['sent'], 'sent', { signature }).catch((e) => log('[send] could not store signature', describe(e)));
+    }
+    // confirm in the background; client polls GET /api/launch/:id. If this misses (DB blip, restart), reconcile() finishes it.
     void (async () => {
-      // one long retry window: a brick must not be lost because the first poll timed out
       let r = await rpc.confirm(signature);
       if (r === 'timeout') r = await rpc.confirm(signature, 180_000);
       if (r === 'confirmed') await place(launch.launchId, 'confirmed');
       else if (r === 'failed') await store.transition(launch.launchId, ['sent'], 'failed');
       log(`[send] ${launch.ticker} ${signature} → ${r}`);
-    })().catch((e) => log('[send] confirm error', describe(e)));
-    return { launch: sent! };
+    })().catch((e) => log('[send] confirm error (reconciler will retry)', describe(e)));
+    return { launch: { ...recorded, signature } };
   }
 
-  return { upload, build, send };
+  const reconciling = { running: false };
+  /**
+   * Finish every launch left in 'sent': confirmed on-chain → placed as a brick; failed → failed.
+   * Runs at boot, whenever the database comes (back) online, and on a timer. Idempotent.
+   *  - no signature: it was never broadcast (the signature is stored before sending) → failed after a grace period
+   *  - not found on-chain: its blockhash expired long ago → failed after 15 minutes
+   */
+  async function reconcile(now = Date.now()): Promise<{ placed: number; failed: number; pending: number }> {
+    const out = { placed: 0, failed: 0, pending: 0 };
+    if (reconciling.running || !rpc) return out; // 'sent' rows only come from live sends; finish them even if DRY_RUN was switched back on
+    reconciling.running = true;
+    try {
+      for (const l of await store.listByStatus('sent')) {
+        const age = now - Date.parse(l.createdAt);
+        if (!l.signature) {
+          if (age > 5 * 60_000 && (await store.transition(l.launchId, ['sent'], 'failed'))) out.failed++;
+          else out.pending++;
+          continue;
+        }
+        let st: Awaited<ReturnType<Rpc['status']>>;
+        try {
+          st = await rpc.status(l.signature, true);
+        } catch (e) {
+          log('[reconcile] rpc error', describe(e));
+          out.pending++;
+          continue;
+        }
+        if (st === 'confirmed') {
+          if (await place(l.launchId, 'confirmed')) {
+            out.placed++;
+            log(`[reconcile] ${l.ticker} ${l.signature} → confirmed (placed)`);
+          }
+        } else if (st === 'failed' || (st === 'unknown' && age > 15 * 60_000)) {
+          if (await store.transition(l.launchId, ['sent'], 'failed')) {
+            out.failed++;
+            log(`[reconcile] ${l.ticker} ${l.signature} → failed (${st})`);
+          }
+        } else out.pending++;
+      }
+    } finally {
+      reconciling.running = false;
+    }
+    return out;
+  }
+
+  return { upload, build, send, reconcile };
 }

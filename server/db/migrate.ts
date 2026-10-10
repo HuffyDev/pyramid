@@ -25,7 +25,18 @@ export function findMigrationsDir(): string {
 export async function runMigrations(pool: Pool, dir = findMigrationsDir(), log: (m: string) => void = console.log) {
   const journal: Journal = JSON.parse(readFileSync(path.join(dir, 'meta', '_journal.json'), 'utf8'));
   const client = await pool.connect();
+  // A checked-out client has no pool 'error' listener: without this, a connection dropped mid-migration
+  // (DB restart, failover, pg_terminate_backend) is an uncaught 'error' event and kills the process.
+  let failure: Error | undefined;
+  const onErr = (e: Error) => {
+    failure ??= e;
+    log(`[db] migration connection lost: ${e.message}`);
+  };
+  client.on('error', onErr);
   try {
+    // never wait forever on another instance's lock or a stuck DDL lock
+    await client.query("SET lock_timeout = '30s'");
+    await client.query("SET statement_timeout = '120s'");
     await client.query('SELECT pg_advisory_lock(727301)');
     const { rows: t } = await client.query(`SELECT to_regclass('public.launches') AS l`);
     const tablesExist = !!t[0].l;
@@ -43,8 +54,13 @@ export async function runMigrations(pool: Pool, dir = findMigrationsDir(), log: 
     }
     await migrate(drizzle(client), { migrationsFolder: dir });
     log('[db] migrations up to date');
+  } catch (e) {
+    failure ??= e as Error;
+    throw e;
   } finally {
     await client.query('SELECT pg_advisory_unlock(727301)').catch(() => {});
-    client.release();
+    await client.query('RESET lock_timeout; RESET statement_timeout').catch(() => {});
+    client.removeListener('error', onErr);
+    client.release(failure); // an error destroys the client instead of returning a broken one to the pool
   }
 }

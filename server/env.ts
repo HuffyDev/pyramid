@@ -10,7 +10,8 @@ const schema = z.object({
   NODE_ENV: z.string().default('development'),
   PORT: z.coerce.number().int().default(5000),
   HOST: z.string().default('0.0.0.0'),
-  DATABASE_URL: z.string().optional(),
+  // trimmed; an empty secret counts as unset
+  DATABASE_URL: z.string().trim().optional().transform((v) => v || undefined),
   HELIUS_RPC_URL: z.string().optional(),
   /** Build + simulate only, never broadcast. ON unless explicitly "false". */
   DRY_RUN: bool(true),
