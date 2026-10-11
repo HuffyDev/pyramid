@@ -1,41 +1,43 @@
 /** All money is integer lamports (1 SOL = 1_000_000_000 lamports). */
 export type Lamports = number;
 
-export interface User {
+export interface Person {
   id: string;
   username: string;
-  displayName: string;
-  discordId: string;
-  wallet: string;
-  color: string;
-  /** Servers where this fictional user holds the (simulated) Manage Server permission. */
-  manages: string[];
+  displayName?: string;
+  avatarUrl?: string;
 }
 
-export interface Server {
+export interface Guild {
   id: string;
   name: string;
-  discordId: string;
-  color: string;
-  members: number;
-  channels: string[];
-  announcementChannel: string;
+  iconUrl?: string;
+  /** User is owner or holds the Manage Server permission. */
+  canManage: boolean;
+}
+
+export interface DiscordSession {
+  user: Person;
+  guilds: Guild[];
+  accessToken: string;
+  expiresAt: number;
 }
 
 export interface TreasuryClaim {
   serverId: string;
+  serverName: string;
+  iconUrl?: string;
   adminId: string;
+  adminUsername: string;
   wallet: string;
-  code: string;
   claimedAt: number;
   updatedAt?: number;
   history: { at: number; wallet: string }[];
-  sample: boolean;
 }
 
-export type Recipient = { kind: 'member'; userId: string } | { kind: 'server'; serverId: string };
-
-export type CoinImage = { kind: 'art'; seed: number } | { kind: 'upload'; dataUrl: string };
+export type Recipient =
+  | { kind: 'member'; username: string; discordId?: string; wallet: string }
+  | { kind: 'server'; serverId: string; serverName: string; iconUrl?: string; channel?: string };
 
 export interface Socials {
   x?: string;
@@ -49,18 +51,18 @@ export interface Launch {
   name: string;
   ticker: string;
   description: string;
-  image: CoinImage;
+  imageUrl: string;
   createdAt: number;
-  devUserId: string;
   devWallet: string;
+  devUsername?: string;
   recipient: Recipient;
   payoutMessage: string;
   devBuy: Lamports;
   socials: Socials;
-  /** Sample market cap in USD, oldest → newest. */
+  /** Market cap in USD, oldest → newest. */
   mcap: number[];
-  failure: { at: number; reason: string } | null;
-  sample: boolean;
+  failure?: { at: number; reason: string } | null;
+  signature?: string;
 }
 
 export interface FeeEvent {
@@ -70,7 +72,7 @@ export interface FeeEvent {
   gross: Lamports;
   platform: Lamports;
   recipient: Lamports;
-  sample: boolean;
+  signature?: string;
 }
 
 export interface Payout {
@@ -80,9 +82,8 @@ export interface Payout {
   amount: Lamports;
   status: 'completed' | 'failed';
   to: string;
-  receipt: string;
+  signature?: string;
   reason?: string;
-  sample: boolean;
 }
 
 export interface Buyback {
@@ -91,9 +92,7 @@ export interface Buyback {
   solSpent: Lamports;
   dcmBought: number;
   dcmBurned: number;
-  rate: number;
-  receipt: string;
-  sample: boolean;
+  signature?: string;
 }
 
 export type NoticeKind = 'launch' | 'fees' | 'payout' | 'failure' | 'claim' | 'offer' | 'buyback';
@@ -107,17 +106,9 @@ export interface Notice {
   launchId?: string;
   serverId?: string;
   offerId?: string;
-  sample: boolean;
 }
 
-export type OfferStatus =
-  | 'awaiting'
-  | 'accepted'
-  | 'posted'
-  | 'retention'
-  | 'completed'
-  | 'refunded'
-  | 'cancelled';
+export type OfferStatus = 'awaiting' | 'accepted' | 'posted' | 'retention' | 'completed' | 'refunded' | 'cancelled';
 
 export interface OfferMessage {
   id: string;
@@ -126,19 +117,20 @@ export interface OfferMessage {
   removedAt?: number;
   qualifies: boolean;
   reason?: string;
+  url?: string;
 }
 
 export type Settlement =
-  | { kind: 'paid'; at: number; recipientAmount: Lamports; platformAmount: Lamports; to: string; receipt: string }
-  | { kind: 'refunded'; at: number; amount: Lamports; reason: string; receipt: string }
-  | { kind: 'cancelled'; at: number; amount: Lamports; receipt: string };
+  | { kind: 'paid'; at: number; recipientAmount: Lamports; platformAmount: Lamports; to: string; signature?: string }
+  | { kind: 'refunded'; at: number; amount: Lamports; reason: string; signature?: string }
+  | { kind: 'cancelled'; at: number; amount: Lamports; signature?: string };
 
 export interface Offer {
   id: string;
   createdAt: number;
-  sponsorId: string;
   sponsorWallet: string;
   serverId: string;
+  serverName: string;
   channel: string;
   price: Lamports;
   postWithinDays: number;
@@ -149,28 +141,17 @@ export interface Offer {
   messages: OfferMessage[];
   settlement?: Settlement;
   log: { at: number; text: string }[];
-  sample: boolean;
 }
 
-export interface Session {
-  walletUserId: string | null;
-  discordUserId: string | null;
-}
-
-export interface DemoState {
-  version: number;
-  seededAt: number;
-  /** Centralised simulated clock (ms). Only moves when the demo clock is advanced. */
-  now: number;
-  refreshedAt: number;
-  claims: Record<string, TreasuryClaim>;
+/** Everything the site renders, as returned by the backend. */
+export interface Snapshot {
   launches: Launch[];
   fees: FeeEvent[];
   payouts: Payout[];
   buybacks: Buyback[];
   offers: Offer[];
+  claims: Record<string, TreasuryClaim>;
   notices: Notice[];
-  session: Session;
 }
 
 export type Result<T = undefined> = { ok: true; value: T } | { ok: false; error: string };

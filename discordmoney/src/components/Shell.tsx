@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Link, NavLink, useLocation } from 'react-router-dom';
-import { connectDiscord, connectWallet, disconnectAll, disconnectDiscord, disconnectWallet, switchIdentity } from '../lib/actions';
-import { DCM_CA, DCM_PUMP_URL, DCM_X_URL, USERS, userById } from '../lib/fixtures';
+import { disconnectWallet, loginDiscord, logoutDiscord } from '../lib/actions';
+import { DCM_CA, DCM_PUMP_URL, DCM_X_URL } from '../lib/fixtures';
 import { shortAddr } from '../lib/format';
-import { useDemo } from '../lib/store';
+import { useApp } from '../lib/store';
 import { Icon, XGlyph, type IconName } from './Icon';
 import { Wordmark } from './Logo';
 import { useToast } from './Toast';
@@ -17,23 +17,6 @@ const NAV: { to: string; label: string; icon: IconName; end?: boolean }[] = [
   { to: '/offers', label: 'Posts', icon: 'megaphone' },
   { to: '/claim', label: 'Claim', icon: 'shield' },
 ];
-
-export function DemoBanner() {
-  const ui = useUI();
-  return (
-    <div className="border-b border-black/30 bg-blurple text-white">
-      <div className="shell flex h-8 items-center justify-between gap-3 text-[12.5px] font-medium">
-        <span className="flex min-w-0 items-center gap-2">
-          <Icon name="info" size={14} className="shrink-0" />
-          <span className="truncate"><span className="hidden sm:inline">Interactive demo — </span><span className="sm:hidden">Demo — </span>no real funds or tokens.</span>
-        </span>
-        <button type="button" onClick={() => ui.open('reset')} className="shrink-0 rounded px-2 py-0.5 text-[12px] font-semibold hover:bg-white/15">
-          Reset demo
-        </button>
-      </div>
-    </div>
-  );
-}
 
 export function Header() {
   const [mobile, setMobile] = useState(false);
@@ -53,8 +36,8 @@ export function Header() {
               end={n.end}
               className={({ isActive }) =>
                 cx(
-                  'relative rounded-md px-3 py-1.5 text-[14px] font-medium transition-colors',
-                  isActive ? 'bg-active text-ink' : 'text-ink-mute hover:bg-hover hover:text-ink-body',
+                  'relative rounded-md px-3 py-1.5 text-[14px] font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-blurple',
+                  isActive ? 'text-ink' : 'text-ink-mute hover:bg-hover hover:text-ink-body',
                 )
               }
             >
@@ -108,16 +91,15 @@ export function Header() {
 }
 
 function AccountControl() {
-  const s = useDemo();
+  const s = useApp();
   const ui = useUI();
   const toast = useToast();
+  const loc = useLocation();
   const [open, setOpen] = useState(false);
-  const [switching, setSwitching] = useState(false);
   const wrap = useRef<HTMLDivElement>(null);
   const btn = useRef<HTMLButtonElement>(null);
-  const wallet = userById(s.session.walletUserId);
-  const discord = userById(s.session.discordUserId);
-  const who = discord ?? wallet;
+  const discord = s.discord?.user ?? null;
+  const wallet = s.wallet;
 
   useEffect(() => {
     if (!open) return;
@@ -134,8 +116,7 @@ function AccountControl() {
         if (!items.length) return;
         e.preventDefault();
         const i = items.indexOf(document.activeElement as HTMLElement);
-        const n = e.key === 'ArrowDown' ? (i + 1) % items.length : (i - 1 + items.length) % items.length;
-        items[n].focus();
+        items[e.key === 'ArrowDown' ? (i + 1) % items.length : (i - 1 + items.length) % items.length].focus();
       }
     };
     document.addEventListener('mousedown', onDoc);
@@ -148,52 +129,41 @@ function AccountControl() {
     };
   }, [open]);
 
-  useEffect(() => {
-    if (!open) setSwitching(false);
-  }, [open]);
-
-  if (!who)
+  if (!wallet && !discord)
     return (
       <button type="button" className="btn-primary btn-sm" onClick={() => ui.open('connect')}>
-        <Icon name="link" size={14} />
-        Connect demo
+        <Icon name="wallet" size={14} />
+        Connect
       </button>
     );
 
   const item = 'flex w-full items-center gap-2.5 rounded px-2 py-1.5 text-left text-[13.5px] text-ink-body hover:bg-blurple hover:text-white focus:bg-blurple focus:text-white focus:outline-none';
   return (
     <div className="relative" ref={wrap}>
-      <button
-        ref={btn}
-        type="button"
-        className="flex items-center gap-2 rounded-md py-1 pl-1 pr-2 transition-colors hover:bg-hover"
-        aria-haspopup="menu"
-        aria-expanded={open}
-        onClick={() => setOpen((v) => !v)}
-      >
-        <Avatar user={who} size={28} status={Boolean(discord)} />
+      <button ref={btn} type="button" className="flex items-center gap-2 rounded-md py-1 pl-1 pr-2 transition-colors hover:bg-hover" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen((v) => !v)}>
+        <Avatar user={discord} name={wallet?.address ?? '?'} size={28} status={Boolean(discord)} />
         <span className="hidden text-left leading-tight sm:block">
-          <span className="block text-[13px] font-semibold text-ink">{discord ? `@${discord.username}` : 'Demo wallet'}</span>
-          <span className="mono block text-[11px] text-ink-mute">{wallet ? shortAddr(wallet.wallet) : 'Wallet not connected'}</span>
+          <span className="block text-[13px] font-semibold text-ink">{discord ? `@${discord.username}` : 'Wallet'}</span>
+          <span className="mono block text-[11px] text-ink-mute">{wallet ? shortAddr(wallet.address) : 'Wallet not connected'}</span>
         </span>
         <Icon name="chevronDown" size={14} className={cx('text-ink-mute transition-transform', open && 'rotate-180')} />
       </button>
       {open && (
-        <div role="menu" aria-label="Demo account" className="absolute right-0 top-full z-50 mt-2 w-72 animate-pop-in overflow-hidden rounded-lg border border-black/40 bg-[#111214] shadow-pop">
-          <div className="relative h-14 bg-blurple" style={{ background: `linear-gradient(135deg, ${who.color}, #4752C4)` }} />
+        <div role="menu" aria-label="Account" className="absolute right-0 top-full z-50 mt-2 w-72 animate-pop-in overflow-hidden rounded-lg border border-black/40 bg-[#111214] shadow-pop">
+          <div className="h-14 bg-gradient-to-br from-blurple to-blurple-hover" />
           <div className="px-3 pb-3">
             <div className="-mt-7 mb-2 inline-flex rounded-full border-[5px] border-[#111214]">
-              <Avatar user={who} size={52} status={Boolean(discord)} />
+              <Avatar user={discord} name={wallet?.address ?? '?'} size={52} status={Boolean(discord)} />
             </div>
-            <div className="text-[15px] font-bold text-ink">{who.displayName}</div>
+            <div className="text-[15px] font-bold text-ink">{discord?.displayName ?? 'Connected wallet'}</div>
             <div className="text-[13px] text-ink-soft">{discord ? `@${discord.username}` : 'Discord not connected'}</div>
             <div className="mt-2 rounded-md bg-card p-2 text-[12px]">
               <div className="flex items-center justify-between gap-2">
-                <span className="text-ink-mute">Demo wallet</span>
+                <span className="text-ink-mute">Wallet</span>
                 {wallet ? (
                   <span className="flex items-center gap-1">
-                    <span className="mono text-ink-body">{shortAddr(wallet.wallet, 6, 4)}</span>
-                    <CopyButton value={wallet.wallet} iconOnly label="Copy wallet" toast="Demo wallet copied" />
+                    <span className="mono text-ink-body">{shortAddr(wallet.address, 6, 4)}</span>
+                    <CopyButton value={wallet.address} iconOnly label="Copy address" toast="Address copied" />
                   </span>
                 ) : (
                   <span className="text-ink-dim">Not connected</span>
@@ -201,72 +171,43 @@ function AccountControl() {
               </div>
               <div className="mt-1 flex items-center justify-between gap-2">
                 <span className="text-ink-mute">Discord ID</span>
-                <span className="mono text-ink-body">{discord ? discord.discordId : '—'}</span>
+                <span className="mono text-ink-body">{discord ? discord.id : '—'}</span>
               </div>
             </div>
-            <div className="mt-2 text-[10.5px] font-semibold uppercase tracking-wide text-ink-dim">Simulated connections only</div>
           </div>
           <div className="divider mx-2" />
           <div className="p-1.5">
-            {!switching ? (
-              <>
-                {!wallet && (
-                  <button role="menuitem" type="button" className={item} onClick={() => { connectWallet(); toast.success('Demo wallet connected'); setOpen(false); }}>
-                    <Icon name="wallet" size={15} /> Use demo wallet
-                  </button>
-                )}
-                {!discord && (
-                  <button role="menuitem" type="button" className={item} onClick={() => { connectDiscord(); toast.success('Demo Discord connected'); setOpen(false); }}>
-                    <Icon name="chat" size={15} /> Connect demo Discord
-                  </button>
-                )}
-                <button role="menuitem" type="button" className={item} onClick={() => setSwitching(true)}>
-                  <Icon name="switch" size={15} /> Switch demo identity
-                </button>
-                {wallet && (
-                  <button role="menuitem" type="button" className={item} onClick={() => { disconnectWallet(); toast.info('Demo wallet disconnected'); setOpen(false); }}>
-                    <Icon name="wallet" size={15} /> Disconnect wallet
-                  </button>
-                )}
-                {discord && (
-                  <button role="menuitem" type="button" className={item} onClick={() => { disconnectDiscord(); toast.info('Demo Discord disconnected'); setOpen(false); }}>
-                    <Icon name="chat" size={15} /> Disconnect Discord
-                  </button>
-                )}
-                <button
-                  role="menuitem"
-                  type="button"
-                  className={cx(item, 'text-[#FF8A8D] hover:bg-danger-btn focus:bg-danger-btn')}
-                  onClick={() => { disconnectAll(); toast.info('Disconnected', 'Your form input was kept.'); setOpen(false); btn.current?.focus(); }}
-                >
-                  <Icon name="logout" size={15} /> Disconnect all
-                </button>
-              </>
-            ) : (
-              <>
-                <button role="menuitem" type="button" className={cx(item, 'text-ink-mute')} onClick={() => setSwitching(false)}>
-                  <Icon name="chevronLeft" size={15} /> Back
-                </button>
-                <div className="max-h-64 overflow-y-auto">
-                  {USERS.map((u) => (
-                    <button
-                      key={u.id}
-                      role="menuitem"
-                      type="button"
-                      className={item}
-                      onClick={() => {
-                        switchIdentity(u.id);
-                        toast.success(`Now acting as @${u.username}`, 'Fictional identity — no real account.');
-                        setOpen(false);
-                      }}
-                    >
-                      <Avatar user={u} size={22} />
-                      <span className="flex-1 truncate">@{u.username}</span>
-                      {u.id === who.id && <Icon name="check" size={14} />}
-                    </button>
-                  ))}
-                </div>
-              </>
+            {!wallet && (
+              <button role="menuitem" type="button" className={item} onClick={() => { setOpen(false); ui.open('connect'); }}>
+                <Icon name="wallet" size={15} /> Connect wallet
+              </button>
+            )}
+            {!discord && (
+              <button
+                role="menuitem"
+                type="button"
+                className={item}
+                onClick={() => {
+                  const r = loginDiscord(loc.pathname);
+                  if (!r.ok) toast.error('Discord login unavailable', r.error);
+                  setOpen(false);
+                }}
+              >
+                <Icon name="chat" size={15} /> Log in with Discord
+              </button>
+            )}
+            <Link role="menuitem" to="/dashboard" className={item} onClick={() => setOpen(false)}>
+              <Icon name="dashboard" size={15} /> My dashboard
+            </Link>
+            {wallet && (
+              <button role="menuitem" type="button" className={item} onClick={() => { void disconnectWallet(); toast.info('Wallet disconnected'); setOpen(false); }}>
+                <Icon name="logout" size={15} /> Disconnect wallet
+              </button>
+            )}
+            {discord && (
+              <button role="menuitem" type="button" className={cx(item, 'text-[#FF8A8D] hover:bg-danger-btn focus:bg-danger-btn')} onClick={() => { logoutDiscord(); toast.info('Logged out of Discord'); setOpen(false); }}>
+                <Icon name="logout" size={15} /> Log out of Discord
+              </button>
             )}
           </div>
         </div>
@@ -282,7 +223,7 @@ export function TokenStrip() {
       <div className="shell flex h-10 items-center gap-2 overflow-x-auto text-[12.5px] [scrollbar-width:none]">
         <span className="inline-flex shrink-0 items-center gap-1.5 font-bold text-ink">
           <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-blurple text-[9px] font-black text-white">D</span>
-          $DCM
+          $DP
         </span>
         <span className="chip shrink-0 bg-mint/15 text-mint-bright ring-1 ring-inset ring-mint/25">CA</span>
         <span className="mono shrink-0 text-ink-soft"><span className="hidden lg:inline">{DCM_CA}</span><span className="lg:hidden">{shortAddr(DCM_CA, 5, 5)}</span></span>
@@ -303,14 +244,13 @@ export function TokenStrip() {
 }
 
 export function Footer() {
-  const ui = useUI();
   return (
     <footer className="mt-16 border-t border-black/30 bg-rail">
       <div className="shell flex flex-col gap-4 py-8 text-[13px] text-ink-mute sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
           <Wordmark compact />
           <span className="hidden text-ink-dim sm:inline">·</span>
-          <span>Independent prototype. Not affiliated with Discord or pump.fun.</span>
+          <span>Not affiliated with Discord or pump.fun.</span>
         </div>
         <div className="flex flex-wrap items-center gap-4">
           <a className="inline-flex items-center gap-1.5 hover:text-ink" href={DCM_X_URL} target="_blank" rel="noreferrer noopener">
@@ -319,9 +259,6 @@ export function Footer() {
           <Link className="hover:text-ink" to="/launches">Launches</Link>
           <Link className="hover:text-ink" to="/offers">Posts</Link>
           <Link className="hover:text-ink" to="/claim">Claim</Link>
-          <button type="button" className="hover:text-ink" onClick={() => ui.open('reset')}>
-            Reset demo
-          </button>
         </div>
       </div>
     </footer>

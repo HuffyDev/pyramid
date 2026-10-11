@@ -55,8 +55,7 @@ export function time(ms: number): string {
   return new Date(ms).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
 }
 
-/** Relative to the simulated demo clock, not wall time. */
-export function ago(ms: number, now: number): string {
+export function ago(ms: number, now: number = Date.now()): string {
   const d = Math.max(0, now - ms);
   const m = Math.floor(d / 60_000);
   if (m < 1) return 'just now';

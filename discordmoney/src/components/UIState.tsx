@@ -1,6 +1,6 @@
 import { createContext, useContext, useMemo, useState, type ReactNode } from 'react';
 
-type Panel = 'connect' | 'token' | 'history' | 'reset' | null;
+type Panel = 'connect' | 'token' | 'history' | null;
 interface Api {
   panel: Panel;
   open: (p: Exclude<Panel, null>) => void;

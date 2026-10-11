@@ -1,5 +1,9 @@
 export const LINK_RE = /(https?:\/\/|www\.|discord\.gg\/|\b[a-z0-9-]+\.(com|io|gg|xyz|net|org|app|co|site|me|fun|so|link)\b)/i;
 
+export const SOLANA_ADDRESS_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
+export const isSolanaAddress = (v: string) => SOLANA_ADDRESS_RE.test(v.trim());
+export const DISCORD_ID_RE = /^\d{17,20}$/;
+
 export function isHttpUrl(v: string): boolean {
   try {
     const u = new URL(v);
@@ -29,8 +33,8 @@ export function validateImage(f: File): string | null {
   return null;
 }
 
-/** Downscale to a small square thumbnail so the demo fits in localStorage. */
-export function toThumbnail(file: File, size = 256): Promise<string> {
+/** Downscale to a square image suitable for a coin icon. */
+export function toThumbnail(file: File, size = 512): Promise<string> {
   return new Promise((resolve, reject) => {
     const url = URL.createObjectURL(file);
     const img = new Image();

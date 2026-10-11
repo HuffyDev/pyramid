@@ -1,45 +1,33 @@
-# DiscordMoney — "Launch a community coin. Get paid through Discord."
+# DiscordMoney — Launch a community coin. Get paid through Discord.
 
-Interactive frontend prototype of a Discord-flavoured community-coin launchpad.
-React 18 + TypeScript + Tailwind CSS + React Router. **Everything — wallets, Discord
-auth, launches, fees, payouts, claims, sponsored-post escrow — is simulated in the
-browser and persisted to `localStorage`.** No backend, keys, signatures or payments.
-
-$DCM contract address: `CAV5LevZc5AonWsgRKEqjgEqXnptXFgudt52Mrxgpump` · X: https://x.com/Payondiscord
-(Buyback/burn figures shown in the app come from the local demo ledger, not on-chain data.)
+React 18 + TypeScript + Tailwind CSS + React Router, in Discord's colour palette.
+Token: **Discord Pay ($DP)** · CA `CAV5LevZc5AonWsgRKEqjgEqXnptXFgudt52Mrxgpump` · X https://x.com/Payondiscord
 
 ## Run
 
 ```bash
-cd discordmoney
 npm install
-npm run dev        # http://localhost:5173
-# production build + server (what Replit publishing runs):
-npm ci --include=dev && npm run build && npm start   # http://localhost:5000 ($PORT)
+npm run dev                                         # http://localhost:5173
+npm ci --include=dev && npm run build && npm start  # production, http://localhost:5000
 ```
 
-Publishing on Replit is configured in the repo-root `.replit`: it builds from this folder
-(`npm ci --include=dev && npm run build` → `dist/`) and serves with `server.mjs`, a
-zero-dependency Node static server with SPA fallback (deep links like `/launches/dm-1a2b`
-work on reload), long-cache headers for hashed assets and a `/healthz` endpoint.
+## Configure (copy `.env.example` → `.env`, or set in Replit Secrets)
 
-Checks: `npm run typecheck`, `npm test` (ledger + state-machine unit tests),
-`npm run e2e <dir-with-coin.png-and-bad.txt>` (Playwright; needs the app served on port 4173,
-e.g. `PORT=4173 npm start`).
+- `VITE_API_BASE_URL` — your backend. Endpoints and data shapes: **[API.md](API.md)**.
+  All server calls live in `src/lib/backend.ts`.
+- `VITE_DISCORD_CLIENT_ID` — enables "Log in with Discord".
 
-## Routes
+These are build-time variables: rebuild/republish after changing them. Without an API the site
+shows empty states, and actions that need the server explain they aren't available yet.
+Wallet connection (Phantom, Solflare, Backpack) works with no configuration.
 
-`/` Launch · `/launches` · `/launches/:id` · `/dashboard` · `/offers` (Posts) · `/claim` · anything else → 404.
+## Publish (Replit)
 
-## Where things live
+`.replit` builds with `npm ci --include=dev && npm run build` and serves `dist/` with
+`server.mjs` (zero-dependency static server with SPA fallback, `/healthz`).
 
-- `src/lib/ledger.ts` — single source of truth for all money maths (integer lamports,
-  `platform = floor(gross/10)`, recipient = remainder, pending = earned − paid, status rules,
-  offer state machine view).
-- `src/lib/actions.ts` — every state change (payout-once guards, claim permission checks,
-  offer accept/submit/remove/pay/refund, demo clock).
-- `src/lib/seed.ts` — deterministic sample data: 18 launches, 6 servers, 8 users, 11 offers,
-  buybacks, claimed + unclaimed treasuries.
-- `src/lib/store.ts` — versioned `localStorage` persistence, corrupt-data recovery, reset.
+## Checks
 
-Independent prototype. Not affiliated with Discord or pump.fun.
+`npm run typecheck` · `npm test` · `node scripts/e2e.mjs <url> [withApi]` (browser smoke test; `scripts/mock-api.mjs` is a test-only stub API).
+
+Not affiliated with Discord or pump.fun.

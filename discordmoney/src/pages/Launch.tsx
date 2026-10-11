@@ -5,14 +5,13 @@ import { LaunchCard } from '../components/launch';
 import { Modal } from '../components/Overlay';
 import { useToast } from '../components/Toast';
 import { useUI } from '../components/UIState';
-import { Avatar, CoinArt, DemoTag, Field, KV, Notice, Segmented, ServerIcon, Spinner, cx } from '../components/ui';
-import { connectWallet, createLaunch } from '../lib/actions';
-import { SAMPLE_DCM_PER_SOL, SERVERS, USERS, serverById, userById } from '../lib/fixtures';
-import { compact, int, shortAddr, sol, solLabel, solToLamports } from '../lib/format';
+import { CoinImage, Empty, Field, KV, Notice, Segmented, ServerIcon, Spinner, cx } from '../components/ui';
+import { createLaunch } from '../lib/actions';
+import { int, shortAddr, solLabel, solToLamports } from '../lib/format';
 import { platformTotals } from '../lib/ledger';
-import { useDemo } from '../lib/store';
+import { useApp } from '../lib/store';
 import type { Recipient } from '../lib/types';
-import { LINK_RE, toThumbnail, validateImage, validateSocial } from '../lib/validate';
+import { DISCORD_ID_RE, LINK_RE, isSolanaAddress, toThumbnail, validateImage, validateSocial } from '../lib/validate';
 
 /* ---------------------------------- Draft --------------------------------- */
 
@@ -22,8 +21,11 @@ interface Draft {
   ticker: string;
   description: string;
   mode: 'member' | 'server';
+  memberName: string;
   memberId: string;
+  memberWallet: string;
   serverId: string;
+  serverName: string;
   channel: string;
   message: string;
   devBuy: string;
@@ -39,8 +41,11 @@ const EMPTY: Draft = {
   ticker: '',
   description: '',
   mode: 'member',
-  memberId: 'usr-minty',
-  serverId: 'srv-pixel',
+  memberName: '',
+  memberId: '',
+  memberWallet: '',
+  serverId: '',
+  serverName: '',
   channel: 'announcements',
   message: '',
   devBuy: '0',
@@ -61,7 +66,8 @@ function loadDraft(): Draft {
   return EMPTY;
 }
 
-type Errors = Partial<Record<'image' | 'name' | 'ticker' | 'description' | 'message' | 'devBuy' | 'x' | 'discord' | 'website' | 'recipient', string>>;
+type Key = 'image' | 'name' | 'ticker' | 'description' | 'memberName' | 'memberId' | 'memberWallet' | 'serverId' | 'serverName' | 'channel' | 'message' | 'devBuy' | 'x' | 'discord' | 'website';
+type Errors = Partial<Record<Key, string>>;
 
 function validate(d: Draft): Errors {
   const e: Errors = {};
@@ -72,6 +78,18 @@ function validate(d: Draft): Errors {
   else if (d.ticker.length > 10) e.ticker = 'Maximum 10 characters.';
   else if (!/^[A-Z0-9]+$/.test(d.ticker)) e.ticker = 'Letters and numbers only.';
   if (d.description.length > 280) e.description = 'Maximum 280 characters.';
+  if (d.mode === 'member') {
+    const u = d.memberName.trim().replace(/^@/, '');
+    if (!u) e.memberName = 'Enter the Discord username.';
+    else if (!/^[a-z0-9._]{2,32}$/i.test(u)) e.memberName = 'Usernames are 2–32 letters, numbers, dots or underscores.';
+    if (d.memberId && !DISCORD_ID_RE.test(d.memberId)) e.memberId = 'User IDs are 17–20 digits.';
+    if (!d.memberWallet.trim()) e.memberWallet = 'Enter the Solana wallet that receives payouts.';
+    else if (!isSolanaAddress(d.memberWallet)) e.memberWallet = 'That is not a valid Solana address.';
+  } else {
+    if (!DISCORD_ID_RE.test(d.serverId)) e.serverId = 'Choose a server or enter its 17–20 digit server ID.';
+    if (!d.serverName.trim()) e.serverName = 'Enter the server name.';
+    if (!/^[a-z0-9_-]{1,100}$/.test(d.channel)) e.channel = 'Use the channel name without #, e.g. announcements.';
+  }
   if (d.message.length > 80) e.message = 'Maximum 80 characters.';
   else if (LINK_RE.test(d.message)) e.message = 'Links are not allowed in payout messages.';
   const lam = solToLamports(d.devBuy);
@@ -81,16 +99,14 @@ function validate(d: Draft): Errors {
     const err = validateSocial(k, d[k]);
     if (err) e[k] = err;
   }
-  if (d.mode === 'member' && !userById(d.memberId)) e.recipient = 'Choose a member.';
-  if (d.mode === 'server' && !serverById(d.serverId)) e.recipient = 'Choose a server.';
   return e;
 }
 
 /* ---------------------------------- Page ---------------------------------- */
 
 export default function LaunchPage() {
-  const s = useDemo();
-  const recent = useMemo(() => [...s.launches].sort((a, b) => b.createdAt - a.createdAt).slice(0, 6), [s.launches]);
+  const s = useApp();
+  const recent = useMemo(() => [...s.data.launches].sort((a, b) => b.createdAt - a.createdAt).slice(0, 6), [s.data.launches]);
   return (
     <div className="shell">
       <section className="grid grid-cols-1 items-start gap-8 lg:grid-cols-[1fr_440px] lg:gap-10">
@@ -108,11 +124,21 @@ export default function LaunchPage() {
             See all launches <Icon name="arrowRight" size={14} />
           </Link>
         </div>
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          {recent.map((l) => (
-            <LaunchCard key={l.id} state={s} launch={l} />
-          ))}
-        </div>
+        {s.status === 'loading' ? (
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {[0, 1, 2].map((i) => (
+              <div key={i} className="skeleton h-[188px] rounded-xl" />
+            ))}
+          </div>
+        ) : recent.length === 0 ? (
+          <Empty icon="rocket" title="No launches yet" body="Be the first to launch a community coin." action={<a href="#launch-form" className="btn-primary btn-sm">Launch a coin</a>} />
+        ) : (
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {recent.map((l) => (
+              <LaunchCard key={l.id} data={s.data} launch={l} />
+            ))}
+          </div>
+        )}
       </section>
     </div>
   );
@@ -122,14 +148,13 @@ function Hero() {
   const steps = [
     { t: 'Launch a coin', d: 'Create a community token with a name, ticker and image.', icon: 'rocket' as const },
     { t: 'Route creator fees', d: 'Allocate fees to a member or a server treasury.', icon: 'coins' as const },
-    { t: 'Notify your community', d: 'Preview payout updates in Discord.', icon: 'bell' as const },
+    { t: 'Notify your community', d: 'Payout updates are posted in Discord.', icon: 'bell' as const },
   ];
   return (
     <div className="lg:sticky lg:top-24 lg:pt-6">
-      <div className="inline-flex items-center gap-2 rounded-full border border-blurple/30 bg-blurple/10 py-1 pl-1 pr-3 text-[12.5px] font-medium text-blurple-pale">
-        <DemoTag />
+      <div className="inline-flex items-center gap-2 rounded-full border border-blurple/30 bg-blurple/10 px-3 py-1 text-[12.5px] font-medium text-blurple-pale">
         <Icon name="flame" size={13} className="text-[#F68BC4]" />
-        Platform fees → $DCM buybacks &amp; burns
+        Platform fees → $DP buybacks &amp; burns
       </div>
       <h1 className="mt-5 text-[40px] font-extrabold leading-[1.04] tracking-[-0.035em] text-ink sm:text-[54px]">
         Launch a community coin.
@@ -144,9 +169,7 @@ function Hero() {
           <li key={st.t} className="flex items-start gap-3.5 rounded-xl border border-line/50 bg-card/60 p-3.5 backdrop-blur">
             <span className="relative inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-blurple text-white">
               <Icon name={st.icon} size={17} />
-              <span className="absolute -right-1.5 -top-1.5 inline-flex h-[18px] w-[18px] items-center justify-center rounded-full border-2 border-card bg-ink text-[10px] font-black text-rail">
-                {i + 1}
-              </span>
+              <span className="absolute -right-1.5 -top-1.5 inline-flex h-[18px] w-[18px] items-center justify-center rounded-full border-2 border-card bg-ink text-[10px] font-black text-rail">{i + 1}</span>
             </span>
             <span>
               <span className="block text-[15px] font-semibold text-ink">{st.t}</span>
@@ -156,7 +179,7 @@ function Hero() {
         ))}
       </ol>
       <p className="mt-5 max-w-[480px] text-[12.5px] leading-relaxed text-ink-dim">
-        Discord is the identity and notification layer. Payouts conceptually go to linked Solana wallets — there is no built-in Discord crypto wallet. Everything here is simulated.
+        Discord is the identity and notification layer. Payouts go to the recipient’s linked Solana wallet.
       </p>
     </div>
   );
@@ -165,7 +188,7 @@ function Hero() {
 /* ---------------------------------- Form ---------------------------------- */
 
 function LaunchForm() {
-  const s = useDemo();
+  const s = useApp();
   const ui = useUI();
   const toast = useToast();
   const [d, setD] = useState<Draft>(loadDraft);
@@ -177,7 +200,8 @@ function LaunchForm() {
   const [drag, setDrag] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const formRef = useRef<HTMLFormElement>(null);
-  const wallet = userById(s.session.walletUserId);
+  const wallet = s.wallet;
+  const guilds = s.discord?.guilds ?? [];
 
   useEffect(() => {
     try {
@@ -188,13 +212,11 @@ function LaunchForm() {
   }, [d]);
 
   const errors = validate(d);
-  const show = (k: keyof Errors) => (submitted || touched[k] ? errors[k] : undefined);
+  const show = (k: Key) => (submitted || touched[k] ? errors[k] : undefined);
   const set = <K extends keyof Draft>(k: K, v: Draft[K]) => setD((x) => ({ ...x, [k]: v }));
-  const blur = (k: string) => () => setTouched((t) => ({ ...t, [k]: true }));
-
-  const server = serverById(d.serverId);
-  const member = userById(d.memberId);
-  const claim = s.claims[d.serverId];
+  const blur = (k: Key) => () => setTouched((t) => ({ ...t, [k]: true }));
+  const claim = d.serverId ? s.data.claims[d.serverId] : undefined;
+  const knownGuild = guilds.find((g) => g.id === d.serverId);
 
   async function onFile(f: File | undefined) {
     if (!f) return;
@@ -226,38 +248,41 @@ function LaunchForm() {
   function onSubmit(e: FormEvent) {
     e.preventDefault();
     if (!wallet) {
-      connectWallet();
-      toast.success('Demo wallet connected', 'Your form input was kept.');
+      ui.open('connect');
       return;
     }
     setSubmitted(true);
-    if (Object.keys(errors).length) {
-      const first = Object.keys(errors)[0];
-      if (first === 'x' || first === 'discord' || first === 'website') set('socialsOpen', true);
+    const keys = Object.keys(errors) as Key[];
+    if (keys.length) {
+      if (keys[0] === 'x' || keys[0] === 'discord' || keys[0] === 'website') set('socialsOpen', true);
       window.setTimeout(() => {
-        const el = formRef.current?.querySelector<HTMLElement>(`[data-field="${first}"]`);
+        const el = formRef.current?.querySelector<HTMLElement>(`[data-field="${keys[0]}"]`);
         el?.focus();
         el?.scrollIntoView({ block: 'center', behavior: 'smooth' });
       }, 30);
-      toast.error('Check the highlighted fields', `${Object.keys(errors).length} field(s) need attention.`);
+      toast.error('Check the highlighted fields', `${keys.length} field(s) need attention.`);
       return;
     }
     setReview(true);
   }
 
-  const recipient: Recipient = d.mode === 'member' ? { kind: 'member', userId: d.memberId } : { kind: 'server', serverId: d.serverId };
+  const recipient: Recipient =
+    d.mode === 'member'
+      ? { kind: 'member', username: d.memberName.trim().replace(/^@/, ''), discordId: d.memberId || undefined, wallet: d.memberWallet.trim() }
+      : { kind: 'server', serverId: d.serverId, serverName: d.serverName.trim(), iconUrl: knownGuild?.iconUrl, channel: d.channel };
   const devBuyLam = solToLamports(d.devBuy) ?? 0;
+  const recipientLabel = d.mode === 'member' ? (d.memberName ? `@${d.memberName.replace(/^@/, '')}` : 'the member') : d.serverName ? `${d.serverName} treasury` : 'the server treasury';
 
   return (
-    <div className="card relative overflow-hidden shadow-glow">
+    <div id="launch-form" className="card relative scroll-mt-24 overflow-hidden shadow-glow">
       <div className="flex items-center justify-between border-b border-black/20 bg-deep/60 px-5 py-3.5">
         <div>
           <h2 className="text-[15px] font-bold text-ink">Create a coin</h2>
-          <p className="text-[12px] text-ink-mute">All fields are simulated locally</p>
+          <p className="text-[12px] text-ink-mute">Launches on pump.fun</p>
         </div>
         {wallet ? (
           <span className="inline-flex items-center gap-1.5 rounded-full bg-mint/15 px-2.5 py-1 text-[11.5px] font-semibold text-mint-bright">
-            <span className="h-1.5 w-1.5 rounded-full bg-mint-bright" /> {shortAddr(wallet.wallet)}
+            <span className="h-1.5 w-1.5 rounded-full bg-mint-bright" /> {shortAddr(wallet.address)}
           </span>
         ) : (
           <button type="button" onClick={() => ui.open('connect')} className="inline-flex items-center gap-1.5 rounded-full bg-white/[0.06] px-2.5 py-1 text-[11.5px] font-semibold text-ink-soft hover:bg-white/10">
@@ -266,14 +291,13 @@ function LaunchForm() {
         )}
       </div>
       <form ref={formRef} onSubmit={onSubmit} noValidate className="grid gap-4 p-5">
-        {/* Image */}
         <Field label="Coin image" error={imgErr ?? show('image')} hint="PNG, JPG, GIF or WebP · max 4MB">
           {d.image ? (
             <div className="flex items-center gap-3 rounded-lg border border-line/60 bg-input p-2.5">
               <img src={d.image.dataUrl} alt="Coin preview" className="h-16 w-16 rounded-lg object-cover" />
               <div className="min-w-0 flex-1">
                 <div className="truncate text-[13px] font-medium text-ink">{d.image.name}</div>
-                <div className="text-[12px] text-ink-mute">{(d.image.size / 1024).toFixed(0)} KB · preview ready</div>
+                <div className="text-[12px] text-ink-mute">{(d.image.size / 1024).toFixed(0)} KB</div>
               </div>
               <button type="button" className="btn-secondary btn-sm" onClick={() => fileRef.current?.click()}>
                 Replace
@@ -314,17 +338,7 @@ function LaunchForm() {
 
         <div className="grid grid-cols-[1fr_130px] gap-3">
           <Field label="Name" htmlFor="f-name" error={show('name')} right={<Counter n={d.name.length} max={32} />}>
-            <input
-              id="f-name"
-              data-field="name"
-              className={cx('input', show('name') && 'input-error')}
-              value={d.name}
-              maxLength={32}
-              placeholder="Guild Cat"
-              onChange={(e) => set('name', e.target.value)}
-              onBlur={blur('name')}
-              aria-invalid={Boolean(show('name'))}
-            />
+            <input id="f-name" data-field="name" className={cx('input', show('name') && 'input-error')} value={d.name} maxLength={32} placeholder="Guild Cat" onChange={(e) => set('name', e.target.value)} onBlur={blur('name')} aria-invalid={Boolean(show('name'))} />
           </Field>
           <Field label="Ticker" htmlFor="f-ticker" error={show('ticker')} right={<Counter n={d.ticker.length} max={10} />}>
             <div className="relative">
@@ -346,19 +360,9 @@ function LaunchForm() {
         </div>
 
         <Field label="Description" htmlFor="f-desc" error={show('description')} right={<Counter n={d.description.length} max={280} />}>
-          <textarea
-            id="f-desc"
-            data-field="description"
-            className={cx('input min-h-[76px] resize-y', show('description') && 'input-error')}
-            value={d.description}
-            maxLength={280}
-            placeholder="What is this coin about? Who does it support?"
-            onChange={(e) => set('description', e.target.value)}
-            onBlur={blur('description')}
-          />
+          <textarea id="f-desc" data-field="description" className={cx('input min-h-[76px] resize-y', show('description') && 'input-error')} value={d.description} maxLength={280} placeholder="What is this coin about? Who does it support?" onChange={(e) => set('description', e.target.value)} onBlur={blur('description')} />
         </Field>
 
-        {/* Recipient */}
         <div>
           <div className="mb-1.5 flex items-center justify-between">
             <span className="label !mb-0">Fee recipient</span>
@@ -373,100 +377,101 @@ function LaunchForm() {
               ]}
             />
           </div>
-          <div className="rounded-lg border border-blurple/45 bg-blurple/[0.07] p-3 shadow-[inset_3px_0_0_#5865F2]">
+          <div className="grid gap-3 rounded-lg border border-blurple/45 bg-blurple/[0.07] p-3 shadow-[inset_3px_0_0_#5865F2]">
             {d.mode === 'member' ? (
-              <div className="grid gap-2.5">
-                <select
-                  aria-label="Member"
-                  data-field="recipient"
-                  className="input !py-2"
-                  value={d.memberId}
-                  onChange={(e) => set('memberId', e.target.value)}
-                >
-                  {USERS.map((u) => (
-                    <option key={u.id} value={u.id}>
-                      @{u.username} — {u.displayName}
-                    </option>
-                  ))}
-                </select>
-                {member && (
-                  <div className="flex items-center gap-3">
-                    <Avatar user={member} size={38} status />
-                    <div className="min-w-0 flex-1 text-[12.5px]">
-                      <div className="font-semibold text-ink">@{member.username}</div>
-                      <div className="mono truncate text-ink-mute">ID {member.discordId}</div>
+              <>
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  <Field label="Discord username" htmlFor="f-mname" error={show('memberName')}>
+                    <div className="relative">
+                      <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-ink-dim">@</span>
+                      <input id="f-mname" data-field="memberName" className={cx('input !pl-7', show('memberName') && 'input-error')} value={d.memberName} placeholder="username" autoCapitalize="none" spellCheck={false} onChange={(e) => set('memberName', e.target.value.replace(/^@/, ''))} onBlur={blur('memberName')} />
                     </div>
-                    <div className="text-right text-[12px]">
-                      <div className="inline-flex items-center gap-1 font-semibold text-mint-bright">
-                        <Icon name="check" size={12} /> Wallet linked
-                      </div>
-                      <div className="mono text-ink-mute">{shortAddr(member.wallet)}</div>
-                    </div>
-                  </div>
-                )}
-              </div>
-            ) : (
-              <div className="grid gap-2.5">
-                <div className="grid grid-cols-[1fr_auto] gap-2">
-                  <select
-                    aria-label="Server"
-                    data-field="recipient"
-                    className="input !py-2"
-                    value={d.serverId}
-                    onChange={(e) => {
-                      const sv = serverById(e.target.value);
-                      setD((x) => ({ ...x, serverId: e.target.value, channel: sv?.announcementChannel ?? '' }));
-                    }}
-                  >
-                    {SERVERS.map((sv) => (
-                      <option key={sv.id} value={sv.id}>
-                        {sv.name}
-                      </option>
-                    ))}
-                  </select>
-                  <select aria-label="Announcement channel" className="input !w-auto !py-2" value={d.channel} onChange={(e) => set('channel', e.target.value)}>
-                    {server?.channels.map((c) => (
-                      <option key={c} value={c}>
-                        #{c}
-                      </option>
-                    ))}
-                  </select>
+                  </Field>
+                  <Field label="User ID (optional)" htmlFor="f-mid" error={show('memberId')}>
+                    <input id="f-mid" data-field="memberId" inputMode="numeric" className={cx('input mono !text-[13px]', show('memberId') && 'input-error')} value={d.memberId} placeholder="17–20 digits" onChange={(e) => set('memberId', e.target.value.replace(/\D/g, '').slice(0, 20))} onBlur={blur('memberId')} />
+                  </Field>
                 </div>
-                {server && (
-                  <div className="flex items-center gap-3">
-                    <ServerIcon server={server} size={38} />
-                    <div className="min-w-0 flex-1 text-[12.5px]">
-                      <div className="font-semibold text-ink">{server.name}</div>
-                      <div className="mono truncate text-ink-mute">ID {server.discordId}</div>
+                <Field label="Payout wallet (Solana)" htmlFor="f-mwallet" error={show('memberWallet')} hint="Creator-fee payouts are sent here.">
+                  <div className="flex gap-2">
+                    <input id="f-mwallet" data-field="memberWallet" className={cx('input mono !text-[13px]', show('memberWallet') && 'input-error')} value={d.memberWallet} placeholder="Wallet address" spellCheck={false} autoCapitalize="none" onChange={(e) => set('memberWallet', e.target.value.trim())} onBlur={blur('memberWallet')} />
+                    {wallet && d.memberWallet !== wallet.address && (
+                      <button type="button" className="btn-secondary btn-sm shrink-0" onClick={() => set('memberWallet', wallet.address)}>
+                        Use mine
+                      </button>
+                    )}
+                  </div>
+                </Field>
+              </>
+            ) : (
+              <>
+                {guilds.length > 0 && (
+                  <Field label="Your servers" htmlFor="f-guild">
+                    <select
+                      id="f-guild"
+                      className="input !py-2"
+                      value={knownGuild ? knownGuild.id : ''}
+                      onChange={(e) => {
+                        const g = guilds.find((x) => x.id === e.target.value);
+                        setD((x) => ({ ...x, serverId: g?.id ?? '', serverName: g?.name ?? '' }));
+                      }}
+                    >
+                      <option value="">Enter a server manually…</option>
+                      {guilds.map((g) => (
+                        <option key={g.id} value={g.id}>
+                          {g.name}
+                          {g.canManage ? ' (admin)' : ''}
+                        </option>
+                      ))}
+                    </select>
+                  </Field>
+                )}
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  <Field label="Server ID" htmlFor="f-sid" error={show('serverId')}>
+                    <input id="f-sid" data-field="serverId" inputMode="numeric" className={cx('input mono !text-[13px]', show('serverId') && 'input-error')} value={d.serverId} placeholder="17–20 digits" onChange={(e) => set('serverId', e.target.value.replace(/\D/g, '').slice(0, 20))} onBlur={blur('serverId')} />
+                  </Field>
+                  <Field label="Server name" htmlFor="f-sname" error={show('serverName')}>
+                    <input id="f-sname" data-field="serverName" className={cx('input', show('serverName') && 'input-error')} value={d.serverName} placeholder="My Server" onChange={(e) => set('serverName', e.target.value)} onBlur={blur('serverName')} />
+                  </Field>
+                </div>
+                <Field label="Announcement channel" htmlFor="f-chan" error={show('channel')}>
+                  <div className="relative">
+                    <Icon name="hash" size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-ink-dim" />
+                    <input id="f-chan" data-field="channel" className={cx('input !pl-8', show('channel') && 'input-error')} value={d.channel} placeholder="announcements" onChange={(e) => set('channel', e.target.value.toLowerCase().replace(/^#/, '').replace(/\s+/g, '-'))} onBlur={blur('channel')} />
+                  </div>
+                </Field>
+                {d.serverId && (
+                  <div className="flex items-center gap-3 text-[12.5px]">
+                    <ServerIcon name={d.serverName || 'Server'} iconUrl={knownGuild?.iconUrl} id={d.serverId} size={34} />
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate font-semibold text-ink">{d.serverName || 'Server'}</div>
+                      <div className="mono truncate text-ink-mute">ID {d.serverId}</div>
                     </div>
-                    <div className="text-right text-[12px]">
-                      {claim ? (
-                        <>
-                          <div className="inline-flex items-center gap-1 font-semibold text-mint-bright">
-                            <Icon name="check" size={12} /> Treasury claimed
-                          </div>
-                          <div className="mono text-ink-mute">{shortAddr(claim.wallet)}</div>
-                        </>
-                      ) : (
-                        <>
-                          <div className="inline-flex items-center gap-1 font-semibold text-gold">
-                            <Icon name="lock" size={12} /> Unclaimed
-                          </div>
-                          <Link to="/claim" className="link block text-[11.5px]">
-                            Claim server →
-                          </Link>
-                        </>
-                      )}
-                    </div>
+                    {claim ? (
+                      <div className="text-right">
+                        <div className="inline-flex items-center gap-1 font-semibold text-mint-bright">
+                          <Icon name="check" size={12} /> Treasury claimed
+                        </div>
+                        <div className="mono text-ink-mute">{shortAddr(claim.wallet)}</div>
+                      </div>
+                    ) : (
+                      <div className="text-right">
+                        <div className="inline-flex items-center gap-1 font-semibold text-gold">
+                          <Icon name="lock" size={12} /> Unclaimed
+                        </div>
+                        <Link to="/claim" className="link block text-[11.5px]">
+                          Claim server →
+                        </Link>
+                      </div>
+                    )}
                   </div>
                 )}
-                {!claim && <p className="text-[11.5px] text-ink-mute">Fees accrue now; payouts unlock after a demo admin claims the treasury.</p>}
-              </div>
+                {d.serverId && !claim && <p className="text-[11.5px] text-ink-mute">Fees accrue right away; payouts start once a server admin claims the treasury.</p>}
+              </>
             )}
           </div>
         </div>
 
-        <Field label="Payout message (optional)" htmlFor="f-msg" error={show('message')} hint="Shown in the Discord payout preview. No links." right={<Counter n={d.message.length} max={80} />}>
+        <Field label="Payout message (optional)" htmlFor="f-msg" error={show('message')} hint="Posted with each payout announcement. No links." right={<Counter n={d.message.length} max={80} />}>
           <input
             id="f-msg"
             data-field="message"
@@ -481,28 +486,15 @@ function LaunchForm() {
           />
         </Field>
 
-        <Field label="Demo dev buy (optional)" htmlFor="f-buy" error={show('devBuy')} hint="Default 0 · maximum 10 SOL · nothing is spent">
+        <Field label="Dev buy (optional)" htmlFor="f-buy" error={show('devBuy')} hint="Buy your own coin at launch · max 10 SOL">
           <div className="relative">
-            <input
-              id="f-buy"
-              data-field="devBuy"
-              inputMode="decimal"
-              className={cx('input !pr-14', show('devBuy') && 'input-error')}
-              value={d.devBuy}
-              onChange={(e) => set('devBuy', e.target.value.replace(',', '.'))}
-              onBlur={blur('devBuy')}
-            />
+            <input id="f-buy" data-field="devBuy" inputMode="decimal" className={cx('input !pr-14', show('devBuy') && 'input-error')} value={d.devBuy} onChange={(e) => set('devBuy', e.target.value.replace(',', '.'))} onBlur={blur('devBuy')} />
             <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-[13px] font-semibold text-ink-mute">SOL</span>
           </div>
         </Field>
 
         <div className="rounded-lg border border-line/60">
-          <button
-            type="button"
-            className="flex w-full items-center justify-between px-3 py-2.5 text-[13.5px] font-medium text-ink-body hover:bg-hover"
-            aria-expanded={d.socialsOpen}
-            onClick={() => set('socialsOpen', !d.socialsOpen)}
-          >
+          <button type="button" className="flex w-full items-center justify-between px-3 py-2.5 text-[13.5px] font-medium text-ink-body hover:bg-hover" aria-expanded={d.socialsOpen} onClick={() => set('socialsOpen', !d.socialsOpen)}>
             <span className="inline-flex items-center gap-2">
               <Icon name={d.socialsOpen ? 'chevronDown' : 'plus'} size={15} /> Add socials
               <span className="text-[12px] text-ink-dim">optional</span>
@@ -513,22 +505,22 @@ function LaunchForm() {
             <div className="grid gap-3 border-t border-line/60 p-3">
               <SocialInput icon={<XGlyph size={13} />} label="X URL" field="x" value={d.x} placeholder="https://x.com/yourcoin" error={show('x')} onChange={(v) => set('x', v)} onBlur={blur('x')} />
               <SocialInput icon={<Icon name="chat" size={14} />} label="Discord invite URL" field="discord" value={d.discord} placeholder="https://discord.gg/yourserver" error={show('discord')} onChange={(v) => set('discord', v)} onBlur={blur('discord')} />
-              <SocialInput icon={<Icon name="globe" size={14} />} label="Website URL" field="website" value={d.website} placeholder="https://yourcoin.example" error={show('website')} onChange={(v) => set('website', v)} onBlur={blur('website')} />
+              <SocialInput icon={<Icon name="globe" size={14} />} label="Website URL" field="website" value={d.website} placeholder="https://yourcoin.com" error={show('website')} onChange={(v) => set('website', v)} onBlur={blur('website')} />
             </div>
           )}
         </div>
 
         <div className="inset grid gap-1 p-3 text-[13px]">
-          <div className="flex justify-between">
-            <span className="text-ink-mute">Demo platform fee</span>
+          <div className="flex justify-between gap-2">
+            <span className="text-ink-mute">Platform fee</span>
             <span className="font-semibold text-ink">10% of creator fees</span>
           </div>
-          <div className="flex justify-between">
-            <span className="text-ink-mute">Recipient share</span>
-            <span className="font-semibold text-mint-bright">90% → {d.mode === 'member' ? `@${member?.username}` : `${server?.name} treasury`}</span>
+          <div className="flex justify-between gap-2">
+            <span className="shrink-0 text-ink-mute">Recipient share</span>
+            <span className="truncate font-semibold text-mint-bright">90% → {recipientLabel}</span>
           </div>
-          <div className="flex justify-between">
-            <span className="text-ink-mute">Demo dev buy</span>
+          <div className="flex justify-between gap-2">
+            <span className="text-ink-mute">Dev buy</span>
             <span className="font-semibold text-ink">{solLabel(devBuyLam)}</span>
           </div>
         </div>
@@ -536,15 +528,14 @@ function LaunchForm() {
         <button type="submit" className="btn-primary h-11 w-full text-[15px] font-semibold">
           {wallet ? (
             <>
-              Review demo launch <Icon name="arrowRight" size={16} />
+              Review launch <Icon name="arrowRight" size={16} />
             </>
           ) : (
             <>
-              <Icon name="wallet" size={16} /> Connect demo wallet
+              <Icon name="wallet" size={16} /> Connect wallet
             </>
           )}
         </button>
-        <p className="-mt-1 text-center text-[11.5px] text-ink-dim">No real transaction, signature or payment. Demo only.</p>
       </form>
 
       <ReviewModal
@@ -585,166 +576,94 @@ function SocialInput({ icon, label, field, value, placeholder, error, onChange, 
 
 /* --------------------------------- Review --------------------------------- */
 
-const STAGES = ['Validating details', 'Creating demo coin', 'Registering recipient', 'Preparing Discord notification'];
-
 function ReviewModal({ open, onClose, draft, recipient, devBuy, onDone }: { open: boolean; onClose: () => void; draft: Draft; recipient: Recipient; devBuy: number; onDone: () => void }) {
-  const s = useDemo();
+  const s = useApp();
   const nav = useNavigate();
   const toast = useToast();
-  const [stage, setStage] = useState(-1);
-  const [failedAt, setFailedAt] = useState<number | null>(null);
-  const [injectFailure, setInjectFailure] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const running = useRef(false);
-  const wallet = userById(s.session.walletUserId);
-  const timers = useRef<number[]>([]);
 
   useEffect(() => {
-    if (!open) {
-      setStage(-1);
-      setFailedAt(null);
-      running.current = false;
-    }
+    if (!open) setError(null);
   }, [open]);
-  useEffect(() => () => timers.current.forEach(clearTimeout), []);
 
-  const busy = stage >= 0 && failedAt === null;
-
-  function run(from: number) {
+  async function submit() {
     if (running.current) return; // duplicate-submit guard
     running.current = true;
-    setFailedAt(null);
-    const failStage = injectFailure ? 2 : -1;
-    const step = (i: number) => {
-      setStage(i);
-      timers.current.push(
-        window.setTimeout(() => {
-          if (i === failStage) {
-            setFailedAt(i);
-            setInjectFailure(false);
-            running.current = false;
-            return;
-          }
-          if (i < STAGES.length - 1) step(i + 1);
-          else {
-            const r = createLaunch({
-              name: draft.name,
-              ticker: draft.ticker,
-              description: draft.description,
-              image: { kind: 'upload', dataUrl: draft.image!.dataUrl },
-              recipient,
-              payoutMessage: draft.message,
-              devBuy,
-              socials: { x: draft.x.trim() || undefined, discord: draft.discord.trim() || undefined, website: draft.website.trim() || undefined },
-            });
-            running.current = false;
-            if (!r.ok) {
-              setFailedAt(i);
-              toast.error('Launch failed', r.error);
-              return;
-            }
-            setStage(STAGES.length);
-            timers.current.push(
-              window.setTimeout(() => {
-                onDone();
-                onClose();
-                toast.success(`${draft.name} launched (demo)`, 'Saved locally. Nothing was deployed.');
-                nav(`/launches/${r.value}`);
-              }, 450),
-            );
-          }
-        }, 650 + Math.random() * 250),
-      );
-    };
-    step(from);
+    setBusy(true);
+    setError(null);
+    const r = await createLaunch({
+      name: draft.name.trim(),
+      ticker: draft.ticker,
+      description: draft.description.trim(),
+      image: draft.image!.dataUrl,
+      recipient,
+      payoutMessage: draft.message.trim(),
+      devBuy,
+      socials: { x: draft.x.trim() || undefined, discord: draft.discord.trim() || undefined, website: draft.website.trim() || undefined },
+    });
+    running.current = false;
+    setBusy(false);
+    if (!r.ok) {
+      setError(r.error);
+      return;
+    }
+    onDone();
+    onClose();
+    toast.success(`${r.value.name} launched`, `$${r.value.ticker} is live.`);
+    nav(`/launches/${r.value.id}`);
   }
 
-  const recipLabel = recipient.kind === 'member' ? `@${userById(recipient.userId)?.username}` : `${serverById(recipient.serverId)?.name} treasury`;
-  const dcmPerFee = SAMPLE_DCM_PER_SOL / 10; // 0.1 SOL platform share at the sample rate
+  const recipLabel = recipient.kind === 'member' ? `@${recipient.username}` : `${recipient.serverName} treasury`;
 
   return (
     <Modal
       open={open}
       onClose={onClose}
       locked={busy}
-      title={stage >= 0 ? (failedAt !== null ? 'Simulated launch failed' : stage >= STAGES.length ? 'Demo coin created' : 'Simulating launch…') : 'Review demo launch'}
-      description={stage < 0 ? 'Check everything before simulating. Nothing is deployed or charged.' : undefined}
+      title={busy ? 'Launching…' : 'Review launch'}
+      description={busy ? 'Approve the transaction in your wallet if prompted.' : 'Check everything before launching.'}
       footer={
-        stage < 0 ? (
-          <>
-            <label className="mr-auto inline-flex cursor-pointer items-center gap-2 text-[12.5px] text-ink-mute">
-              <input type="checkbox" className="h-4 w-4 accent-[#5865F2]" checked={injectFailure} onChange={(e) => setInjectFailure(e.target.checked)} />
-              Simulate a failure
-            </label>
-            <button type="button" className="btn-ghost" onClick={onClose}>
-              Back to edit
-            </button>
-            <button type="button" className="btn-primary" data-autofocus onClick={() => run(0)} disabled={running.current}>
-              <Icon name="play" size={14} /> Simulate launch
-            </button>
-          </>
-        ) : failedAt !== null ? (
-          <>
-            <button type="button" className="btn-ghost" onClick={onClose}>
-              Back to edit
-            </button>
-            <button type="button" className="btn-primary" data-autofocus onClick={() => run(failedAt)}>
-              <Icon name="refresh" size={14} /> Retry from “{STAGES[failedAt]}”
-            </button>
-          </>
-        ) : undefined
+        <>
+          <button type="button" className="btn-ghost" onClick={onClose} disabled={busy}>
+            Back to edit
+          </button>
+          <button type="button" className="btn-primary" data-autofocus onClick={() => void submit()} disabled={busy}>
+            {busy ? <Spinner size={15} /> : error ? <Icon name="refresh" size={14} /> : <Icon name="rocket" size={14} />} {busy ? 'Launching…' : error ? 'Try again' : 'Launch coin'}
+          </button>
+        </>
       }
     >
-      {stage < 0 ? (
-        <div className="grid gap-4">
-          <div className="flex items-center gap-4 rounded-lg bg-card p-3">
-            {draft.image ? <img src={draft.image.dataUrl} alt="" className="h-[72px] w-[72px] rounded-xl object-cover" /> : <CoinArt image={{ kind: 'art', seed: 1 }} size={72} />}
-            <div className="min-w-0">
-              <div className="text-lg font-bold text-ink">{draft.name}</div>
-              <div className="mono text-ink-mute">${draft.ticker}</div>
-              {draft.description && <p className="mt-1 line-clamp-2 text-[13px] text-ink-soft">{draft.description}</p>}
-            </div>
+      <div className="grid gap-4">
+        <div className="flex items-center gap-4 rounded-lg bg-card p-3">
+          <CoinImage src={draft.image?.dataUrl} name={draft.name} size={72} />
+          <div className="min-w-0">
+            <div className="text-lg font-bold text-ink">{draft.name}</div>
+            <div className="mono text-ink-mute">${draft.ticker}</div>
+            {draft.description && <p className="mt-1 line-clamp-2 text-[13px] text-ink-soft">{draft.description}</p>}
           </div>
-          <div className="inset divide-y divide-line/40 px-3">
-            <KV k="Recipient" v={recipLabel} />
-            <KV k="Demo wallet (developer)" v={wallet ? shortAddr(wallet.wallet, 6, 6) : '—'} mono />
-            {recipient.kind === 'server' && <KV k="Announcement channel" v={`#${draft.channel}`} />}
-            {recipient.kind === 'server' && <KV k="Treasury" v={s.claims[recipient.serverId] ? <span className="text-mint-bright">Claimed</span> : <span className="text-gold">Unclaimed — payouts locked until claimed</span>} />}
-            <KV k="Payout message" v={draft.message || <span className="text-ink-dim">None</span>} />
-            <KV k="Socials" v={[draft.x && 'X', draft.discord && 'Discord', draft.website && 'Website'].filter(Boolean).join(' · ') || <span className="text-ink-dim">None</span>} />
-          </div>
-          <div className="inset divide-y divide-line/40 px-3">
-            <KV k="Demo dev buy" v={solLabel(devBuy)} />
-            <KV k="Simulated network fee" v="0 SOL (simulated)" />
-            <KV k="Platform share of creator fees" v="10% (floor, in lamports)" />
-            <KV k="Recipient share of creator fees" v={<span className="text-mint-bright">90%</span>} />
-            <KV k="Example: 1 SOL in fees" v={`${sol(900_000_000)} SOL → recipient · ${sol(100_000_000)} SOL → ~${compact(dcmPerFee)} $DCM burn`} />
-          </div>
-          <Notice>This creates a launch record in your browser only. Sample amounts and fee events are not real.</Notice>
         </div>
-      ) : (
-        <div className="grid gap-4">
-          <ol className="grid gap-2" aria-live="polite">
-            {STAGES.map((label, i) => {
-              const state = failedAt === i ? 'fail' : i < stage || stage >= STAGES.length ? 'done' : i === stage && failedAt === null ? 'run' : 'wait';
-              return (
-                <li key={label} className={cx('flex items-center gap-3 rounded-lg border px-3 py-2.5 text-[14px] transition-colors', state === 'run' ? 'border-blurple/50 bg-blurple/10' : state === 'fail' ? 'border-danger/50 bg-danger/10' : 'border-line/50 bg-card')}>
-                  <span className={cx('inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full', state === 'done' ? 'bg-mint text-white' : state === 'fail' ? 'bg-danger text-white' : state === 'run' ? 'text-blurple-light' : 'bg-rail text-ink-dim')}>
-                    {state === 'done' ? <Icon name="check" size={13} strokeWidth={3} /> : state === 'fail' ? <Icon name="x" size={13} strokeWidth={3} /> : state === 'run' ? <Spinner size={18} /> : <span className="text-[11px] font-bold">{i + 1}</span>}
-                  </span>
-                  <span className={cx('flex-1', state === 'wait' ? 'text-ink-mute' : 'text-ink')}>{label}</span>
-                  {state === 'done' && <span className="text-[12px] text-mint-bright">Done</span>}
-                </li>
-              );
-            })}
-          </ol>
-          {failedAt !== null && (
-            <Notice tone="error">
-              <b className="text-ink">Simulated failure while “{STAGES[failedAt]}”.</b> No record was created and nothing was charged. Retry to continue from this step, or go back to edit.
-            </Notice>
-          )}
-          {stage >= STAGES.length && <Notice tone="success">Launch record saved locally. Opening its detail page…</Notice>}
+        <div className="inset divide-y divide-line/40 px-3">
+          <KV k="Recipient" v={recipLabel} />
+          {recipient.kind === 'member' && <KV k="Payout wallet" v={shortAddr(recipient.wallet, 6, 6)} mono />}
+          {recipient.kind === 'server' && <KV k="Announcement channel" v={`#${recipient.channel}`} />}
+          {recipient.kind === 'server' && <KV k="Treasury" v={s.data.claims[recipient.serverId] ? <span className="text-mint-bright">Claimed</span> : <span className="text-gold">Unclaimed — payouts start after claim</span>} />}
+          <KV k="Your wallet" v={s.wallet ? shortAddr(s.wallet.address, 6, 6) : '—'} mono />
+          <KV k="Payout message" v={draft.message || <span className="text-ink-dim">None</span>} />
+          <KV k="Socials" v={[draft.x && 'X', draft.discord && 'Discord', draft.website && 'Website'].filter(Boolean).join(' · ') || <span className="text-ink-dim">None</span>} />
         </div>
-      )}
+        <div className="inset divide-y divide-line/40 px-3">
+          <KV k="Dev buy" v={solLabel(devBuy)} />
+          <KV k="Platform share of creator fees" v="10%" />
+          <KV k="Recipient share of creator fees" v={<span className="text-mint-bright">90%</span>} />
+        </div>
+        {error && (
+          <Notice tone="error">
+            <b className="text-ink">Launch failed.</b> {error}
+          </Notice>
+        )}
+      </div>
     </Modal>
   );
 }
@@ -752,25 +671,25 @@ function ReviewModal({ open, onClose, draft, recipient, devBuy, onDone }: { open
 /* -------------------------------- Flywheel -------------------------------- */
 
 function Flywheel() {
-  const s = useDemo();
+  const s = useApp();
   const ui = useUI();
-  const p = platformTotals(s);
+  const p = platformTotals(s.data);
   const steps = [
-    { n: 1, t: 'Collect the 10% platform share', v: solLabel(p.revenue, 3), sub: 'collected from sample fee events', icon: 'coins' as const },
-    { n: 2, t: 'Simulate a $DCM buyback', v: solLabel(p.spent, 3), sub: `spent across ${p.count} demo buybacks`, icon: 'refresh' as const },
-    { n: 3, t: 'Burn the sample tokens', v: `${int(p.burned)} $DCM`, sub: `at a sample ${int(SAMPLE_DCM_PER_SOL)} $DCM/SOL`, icon: 'flame' as const },
+    { n: 1, t: 'Collect the 10% platform share', v: solLabel(p.revenue, 3), sub: 'from creator fees', icon: 'coins' as const },
+    { n: 2, t: 'Buy back $DP', v: solLabel(p.spent, 3), sub: `across ${p.count} buyback${p.count === 1 ? '' : 's'}`, icon: 'refresh' as const },
+    { n: 3, t: 'Burn the tokens', v: `${int(p.burned)} $DP`, sub: 'burned to date', icon: 'flame' as const },
   ];
   return (
     <section className="card relative mt-14 overflow-hidden">
       <div className="pointer-events-none absolute -right-24 -top-24 h-72 w-72 rounded-full bg-blurple/20 blur-3xl" />
-      <div className="relative grid gap-6 p-6 md:grid-cols-[260px_1fr] md:p-8">
+      <div className="relative grid grid-cols-1 gap-6 p-6 md:grid-cols-[260px_1fr] md:p-8">
         <div>
-          <div className="text-[11px] font-bold uppercase tracking-[0.08em] text-blurple-light">The $DCM flywheel</div>
+          <div className="text-[11px] font-bold uppercase tracking-[0.08em] text-blurple-light">The $DP flywheel</div>
           <div className="mt-2 text-[72px] font-black leading-none tracking-[-0.05em] text-ink">100%</div>
-          <p className="mt-3 text-[14px] leading-relaxed text-ink-soft">In this demo, platform revenue funds simulated $DCM buybacks &amp; burns.</p>
+          <p className="mt-3 text-[14px] leading-relaxed text-ink-soft">of platform revenue funds $DP buybacks &amp; burns.</p>
           <div className="mt-4 flex flex-wrap items-center gap-2">
             <button type="button" className="btn-primary btn-sm" onClick={() => ui.open('history')}>
-              <Icon name="flame" size={14} /> View demo history
+              <Icon name="flame" size={14} /> Buyback history
             </button>
             <span className="text-[12px] text-ink-mute">
               {solLabel(p.available, 3)} <span className="text-ink-dim">awaiting next buyback</span>
@@ -794,7 +713,6 @@ function Flywheel() {
           ))}
         </ol>
       </div>
-      <div className="relative border-t border-black/20 bg-deep/50 px-6 py-2.5 text-[11.5px] text-ink-dim md:px-8">Counters derived from the sample ledger · sample exchange rate · no real tokens.</div>
     </section>
   );
 }

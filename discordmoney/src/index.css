@@ -20,7 +20,7 @@
     color: #fff;
   }
   :focus-visible {
-    outline: 2px solid #00a8fc;
+    outline: 2px solid #5865f2;
     outline-offset: 2px;
     border-radius: 4px;
   }

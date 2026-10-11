@@ -1,21 +1,27 @@
-import { useMemo, useRef, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { Icon } from '../components/Icon';
-import { DiscordPreview, McapChart, ReceiptModal, RecipientInline, Socials, WalletStatus, launchReceiptId, type ReceiptTarget } from '../components/launch';
-import { useToast } from '../components/Toast';
-import { Avatar, CoinArt, CopyButton, Empty, KV, MonoId, Notice, SampleTag, ServerIcon, Spinner, StatusBadge, cx } from '../components/ui';
-import { generateFees, simulateFailure, simulatePayout } from '../lib/actions';
-import { serverById, userById } from '../lib/fixtures';
+import { DiscordPreview, McapChart, RecipientInline, Socials, TxModal, WalletStatus, type TxTarget } from '../components/launch';
+import { Avatar, CoinImage, CopyButton, Empty, KV, MonoId, Notice, ServerIcon, Spinner, StatusBadge, cx } from '../components/ui';
+import { DCM_PUMP_URL, solscanAccount, solscanTx } from '../lib/fixtures';
 import { dateTime, date, shortAddr, sol, solLabel } from '../lib/format';
-import { MIN_PAYOUT, canPayout, isClaimed, launchStatus, payoutDestination, totalsFor } from '../lib/ledger';
-import { useDemo } from '../lib/store';
-import type { DemoState, Launch } from '../lib/types';
+import { MIN_PAYOUT, isClaimed, launchStatus, payoutDestination, totalsFor } from '../lib/ledger';
+import { useApp } from '../lib/store';
+import type { Launch, Snapshot } from '../lib/types';
 
 export default function LaunchDetailPage() {
   const { id } = useParams();
-  const s = useDemo();
+  const app = useApp();
+  const s = app.data;
   const launch = s.launches.find((l) => l.id === id);
-  const [receipt, setReceipt] = useState<ReceiptTarget | null>(null);
+  const [tx, setTx] = useState<TxTarget | null>(null);
+
+  if (!launch && app.status === 'loading')
+    return (
+      <div className="shell flex items-center justify-center gap-3 py-24 text-ink-mute">
+        <Spinner size={20} /> Loading launch…
+      </div>
+    );
 
   if (!launch)
     return (
@@ -23,7 +29,7 @@ export default function LaunchDetailPage() {
         <Empty
           icon="search"
           title="Launch not found"
-          body={<>No demo launch with ID <span className="mono">{id}</span>. It may have been removed by a demo reset.</>}
+          body={<>No launch with ID <span className="mono">{id}</span>.</>}
           action={
             <Link to="/launches" className="btn-primary">
               <Icon name="arrowLeft" size={14} /> Back to launches
@@ -34,7 +40,6 @@ export default function LaunchDetailPage() {
     );
 
   const t = totalsFor(s, launch.id);
-  const status = launchStatus(s, launch);
   const lastPayout = [...s.payouts].filter((p) => p.launchId === launch.id && p.status === 'completed').sort((a, b) => b.at - a.at)[0];
 
   return (
@@ -43,26 +48,27 @@ export default function LaunchDetailPage() {
         <Icon name="arrowLeft" size={14} /> Back to launches
       </Link>
 
-      {/* Identity */}
       <section className="card relative overflow-hidden">
         <div className="pointer-events-none absolute inset-x-0 top-0 h-24 bg-gradient-to-b from-blurple/20 to-transparent" />
         <div className="relative flex flex-col gap-5 p-5 sm:flex-row sm:items-start sm:p-6">
-          <CoinArt image={launch.image} size={96} label={launch.name} className="!rounded-2xl ring-4 ring-card" />
+          <CoinImage src={launch.imageUrl} name={launch.name} size={96} className="!rounded-2xl ring-4 ring-card" />
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-2">
               <h1 className="text-[28px] font-extrabold tracking-[-0.02em] text-ink">{launch.name}</h1>
               <span className="mono rounded bg-rail px-2 py-0.5 !text-[13px] text-ink-soft">${launch.ticker}</span>
-              <StatusBadge status={status} />
-              <SampleTag sample={launch.sample} />
+              <StatusBadge status={launchStatus(s, launch)} />
             </div>
             <p className="mt-2 max-w-2xl text-[14.5px] leading-relaxed text-ink-soft">{launch.description || <span className="text-ink-dim">No description.</span>}</p>
             <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-[12.5px]">
               <span className="flex items-center gap-1.5 text-ink-mute">
-                Launch ID <MonoId value={launch.id} />
+                Mint <MonoId value={launch.mint} />
               </span>
-              <span className="flex items-center gap-1.5 text-ink-mute">
-                Demo mint <MonoId value={launch.mint} />
-              </span>
+              <a href={`https://pump.fun/coin/${launch.mint}`} target="_blank" rel="noreferrer noopener" className="link inline-flex items-center gap-1">
+                pump.fun <Icon name="arrowRight" size={12} className="-rotate-45" />
+              </a>
+              <a href={solscanAccount(launch.mint)} target="_blank" rel="noreferrer noopener" className="link inline-flex items-center gap-1">
+                Solscan <Icon name="arrowRight" size={12} className="-rotate-45" />
+              </a>
             </div>
             <div className="mt-3">
               <Socials launch={launch} />
@@ -76,40 +82,36 @@ export default function LaunchDetailPage() {
           <section className="card p-5">
             <McapChart series={launch.mcap} />
           </section>
-
-          <FeeBreakdown state={s} launch={launch} />
-
-          <Ledger state={s} launch={launch} onReceipt={setReceipt} />
-
+          <FeeBreakdown data={s} launch={launch} />
+          <Ledger data={s} launch={launch} onTx={setTx} />
           <section className="card p-5">
             <div className="mb-3 flex items-center justify-between gap-2">
-              <h2 className="text-[15px] font-bold text-ink">Discord notification preview</h2>
-              <span className="text-[12px] text-ink-mute">Fictional server &amp; bot</span>
+              <h2 className="text-[15px] font-bold text-ink">Discord announcement</h2>
+              <span className="text-[12px] text-ink-mute">{lastPayout ? 'Latest payout' : 'Next payout'}</span>
             </div>
-            <DiscordPreview launch={launch} amount={lastPayout?.amount ?? t.pending} at={lastPayout?.at ?? s.now} />
-            <p className="mt-2 text-[12px] text-ink-mute">DiscordMoney does not post to Discord in this demo. This is how a payout update could look.</p>
+            <DiscordPreview launch={launch} amount={lastPayout?.amount ?? t.pending} at={lastPayout?.at ?? Date.now()} />
           </section>
         </div>
 
         <aside className="grid content-start gap-4">
-          <DemoControls state={s} launch={launch} />
-          <RecipientPanel state={s} launch={launch} />
-          <Metadata state={s} launch={launch} onReceipt={setReceipt} />
+          <PayoutStatus data={s} launch={launch} />
+          <RecipientPanel data={s} launch={launch} />
+          <Metadata launch={launch} onTx={setTx} />
         </aside>
       </div>
-      <ReceiptModal target={receipt} onClose={() => setReceipt(null)} />
+      <TxModal target={tx} onClose={() => setTx(null)} />
     </div>
   );
 }
 
-function FeeBreakdown({ state, launch }: { state: DemoState; launch: Launch }) {
-  const t = totalsFor(state, launch.id);
+function FeeBreakdown({ data, launch }: { data: Snapshot; launch: Launch }) {
+  const t = totalsFor(data, launch.id);
   const paidPct = t.earned ? (t.paid / t.earned) * 100 : 0;
   return (
     <section className="card p-5">
       <div className="mb-4 flex items-center justify-between">
         <h2 className="text-[15px] font-bold text-ink">Fee breakdown</h2>
-        <span className="text-[12px] text-ink-mute">{t.feeCount} fee events · lamport-exact</span>
+        <span className="text-[12px] text-ink-mute">{t.feeCount} fee event{t.feeCount === 1 ? '' : 's'}</span>
       </div>
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
         <Box label="Gross fees" value={t.gross} />
@@ -135,23 +137,19 @@ function Box({ label, value, tone, muted }: { label: string; value: number; tone
   return (
     <div className="inset px-3 py-2.5">
       <div className="kpi !text-[10px]">{label}</div>
-      <div className={cx('mt-1 truncate text-[16px] font-bold tabular-nums', tone === 'mint' ? 'text-mint-bright' : tone === 'gold' ? 'text-gold' : muted ? 'text-ink-soft' : 'text-ink')}>
-        {sol(value)}
-      </div>
+      <div className={cx('mt-1 truncate text-[16px] font-bold tabular-nums', tone === 'mint' ? 'text-mint-bright' : tone === 'gold' ? 'text-gold' : muted ? 'text-ink-soft' : 'text-ink')}>{sol(value)}</div>
       <div className="text-[10.5px] text-ink-dim">SOL</div>
     </div>
   );
 }
 
-function Ledger({ state, launch, onReceipt }: { state: DemoState; launch: Launch; onReceipt: (r: ReceiptTarget) => void }) {
+function Ledger({ data, launch, onTx }: { data: Snapshot; launch: Launch; onTx: (r: TxTarget) => void }) {
   const [all, setAll] = useState(false);
   const rows = useMemo(() => {
-    type Row = { at: number; key: string; kind: 'fee' | 'payout' | 'failed'; credit: number; debit: number; gross?: number; platform?: number; sample: boolean; open: () => void; balance: number };
-    const fees = state.fees.filter((f) => f.launchId === launch.id);
-    const pays = state.payouts.filter((p) => p.launchId === launch.id);
+    type Row = { at: number; key: string; kind: 'fee' | 'payout' | 'failed'; credit: number; debit: number; gross?: number; platform?: number; open: () => void; balance: number };
     const list: Row[] = [
-      ...fees.map((f) => ({ at: f.at, key: f.id, kind: 'fee' as const, credit: f.recipient, debit: 0, gross: f.gross, platform: f.platform, sample: f.sample, open: () => onReceipt({ kind: 'fee', fee: f, launch }), balance: 0 })),
-      ...pays.map((p) => ({ at: p.at, key: p.id, kind: p.status === 'completed' ? ('payout' as const) : ('failed' as const), credit: 0, debit: p.status === 'completed' ? p.amount : 0, sample: p.sample, open: () => onReceipt({ kind: 'payout', payout: p, launch }), balance: 0 })),
+      ...data.fees.filter((f) => f.launchId === launch.id).map((f) => ({ at: f.at, key: f.id, kind: 'fee' as const, credit: f.recipient, debit: 0, gross: f.gross, platform: f.platform, open: () => onTx({ kind: 'fee', fee: f, launch }), balance: 0 })),
+      ...data.payouts.filter((p) => p.launchId === launch.id).map((p) => ({ at: p.at, key: p.id, kind: p.status === 'completed' ? ('payout' as const) : ('failed' as const), credit: 0, debit: p.status === 'completed' ? p.amount : 0, open: () => onTx({ kind: 'payout', payout: p, launch }), balance: 0 })),
     ].sort((a, b) => a.at - b.at || (a.kind === 'fee' ? -1 : 1));
     let bal = 0;
     for (const r of list) {
@@ -159,7 +157,7 @@ function Ledger({ state, launch, onReceipt }: { state: DemoState; launch: Launch
       r.balance = bal;
     }
     return list.reverse();
-  }, [state.fees, state.payouts, launch, onReceipt]);
+  }, [data.fees, data.payouts, launch, onTx]);
   const visible = all ? rows : rows.slice(0, 8);
   return (
     <section className="card overflow-hidden">
@@ -168,7 +166,7 @@ function Ledger({ state, launch, onReceipt }: { state: DemoState; launch: Launch
         <span className="text-[12px] text-ink-mute">{rows.length} entries</span>
       </div>
       {rows.length === 0 ? (
-        <div className="border-t border-black/20 px-5 py-8 text-center text-[13px] text-ink-mute">No fee events yet. Use “Generate sample fees” in demo controls.</div>
+        <div className="border-t border-black/20 px-5 py-8 text-center text-[13px] text-ink-mute">No fees yet. Creator fees appear here as the coin trades.</div>
       ) : (
         <div className="overflow-x-auto border-t border-black/20">
           <table className="w-full min-w-[600px] text-left text-[12.5px]">
@@ -180,7 +178,7 @@ function Ledger({ state, launch, onReceipt }: { state: DemoState; launch: Launch
                 <th className="px-3 py-2 text-right font-bold">Platform</th>
                 <th className="px-3 py-2 text-right font-bold">Recipient ±</th>
                 <th className="px-3 py-2 text-right font-bold">Pending</th>
-                <th className="px-5 py-2 text-right font-bold">Receipt</th>
+                <th className="px-5 py-2 text-right font-bold">Details</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-black/20 tabular-nums">
@@ -188,23 +186,15 @@ function Ledger({ state, launch, onReceipt }: { state: DemoState; launch: Launch
                 <tr key={r.key} className="hover:bg-white/[0.02]">
                   <td className="whitespace-nowrap px-5 py-2.5 text-ink-soft">{dateTime(r.at)}</td>
                   <td className="px-3 py-2.5">
-                    {r.kind === 'fee' ? (
-                      <span className="chip bg-blurple/15 text-blurple-light">Fee event</span>
-                    ) : r.kind === 'payout' ? (
-                      <span className="chip bg-mint/15 text-mint-bright">Payout</span>
-                    ) : (
-                      <span className="chip bg-danger/12 text-[#FF8A8D]">Failed attempt</span>
-                    )}
+                    {r.kind === 'fee' ? <span className="chip bg-blurple/15 text-blurple-light">Fee</span> : r.kind === 'payout' ? <span className="chip bg-mint/15 text-mint-bright">Payout</span> : <span className="chip bg-danger/12 text-[#FF8A8D]">Failed payout</span>}
                   </td>
                   <td className="px-3 py-2.5 text-right text-ink-body">{r.gross !== undefined ? sol(r.gross) : '—'}</td>
                   <td className="px-3 py-2.5 text-right text-ink-mute">{r.platform !== undefined ? sol(r.platform) : '—'}</td>
-                  <td className={cx('px-3 py-2.5 text-right font-semibold', r.credit ? 'text-ink' : r.debit ? 'text-mint-bright' : 'text-ink-dim')}>
-                    {r.credit ? `+${sol(r.credit)}` : r.debit ? `−${sol(r.debit)}` : '0'}
-                  </td>
+                  <td className={cx('px-3 py-2.5 text-right font-semibold', r.credit ? 'text-ink' : r.debit ? 'text-mint-bright' : 'text-ink-dim')}>{r.credit ? `+${sol(r.credit)}` : r.debit ? `−${sol(r.debit)}` : '0'}</td>
                   <td className="px-3 py-2.5 text-right text-gold">{sol(r.balance)}</td>
                   <td className="px-5 py-2.5 text-right">
                     <button type="button" className="link text-[12px]" onClick={r.open}>
-                      {r.sample ? 'Sample' : 'Demo'}
+                      View
                     </button>
                   </td>
                 </tr>
@@ -225,176 +215,109 @@ function Ledger({ state, launch, onReceipt }: { state: DemoState; launch: Launch
   );
 }
 
-function DemoControls({ state, launch }: { state: DemoState; launch: Launch }) {
-  const toast = useToast();
-  const [busy, setBusy] = useState<null | 'fees' | 'pay' | 'fail'>(null);
-  const lock = useRef(false);
-  const check = canPayout(state, launch);
-  const t = totalsFor(state, launch.id);
-
-  const act = (kind: 'fees' | 'pay' | 'fail') => {
-    if (lock.current) return;
-    lock.current = true;
-    setBusy(kind);
-    window.setTimeout(() => {
-      if (kind === 'fees') {
-        const r = generateFees(launch.id);
-        if (r.ok) toast.success(`+${sol(r.value.gross)} SOL sample fees`, `${sol(r.value.recipient)} SOL to recipient · ${sol(r.value.platform)} SOL platform`);
-        else toast.error('Could not generate fees', r.error);
-      } else if (kind === 'pay') {
-        const r = simulatePayout(launch.id);
-        if (r.ok) toast.success(`Paid ${sol(r.value.amount)} SOL (simulated)`, `Demo receipt ${r.value.receipt}`);
-        else toast.error('Payout blocked', r.error);
-      } else {
-        const r = simulateFailure(launch.id);
-        if (r.ok) toast.error('Simulated payout failure', 'No funds moved. Pending balance unchanged — retry anytime.');
-        else toast.error('Cannot simulate failure', r.error);
-      }
-      lock.current = false;
-      setBusy(null);
-    }, 450);
-  };
-
+function PayoutStatus({ data, launch }: { data: Snapshot; launch: Launch }) {
+  const t = totalsFor(data, launch.id);
+  const unclaimed = launch.recipient.kind === 'server' && !isClaimed(data, launch.recipient.serverId);
   return (
     <section className="card overflow-hidden border-blurple/40">
       <div className="flex items-center justify-between border-b border-black/20 bg-blurple/10 px-4 py-3">
         <h2 className="flex items-center gap-2 text-[14px] font-bold text-ink">
-          <Icon name="zap" size={15} className="text-blurple-light" /> Demo controls
+          <Icon name="wallet" size={15} className="text-blurple-light" /> Payout status
         </h2>
-        <span className="chip bg-blurple text-[10px] uppercase text-white">Simulated</span>
+        <StatusBadge status={launchStatus(data, launch)} />
       </div>
-      <div className="grid gap-2 p-4">
-        <div className="mb-1 flex items-center justify-between text-[12.5px]">
+      <div className="grid gap-2 p-4 text-[13px]">
+        <div className="flex items-center justify-between">
           <span className="text-ink-mute">Pending for recipient</span>
           <span className="font-bold text-gold">{solLabel(t.pending)}</span>
         </div>
-        <button type="button" className="btn-secondary w-full justify-start" disabled={busy !== null} onClick={() => act('fees')}>
-          {busy === 'fees' ? <Spinner size={15} /> : <Icon name="plus" size={15} />} Generate sample fees
-        </button>
-        <button type="button" className="btn-success w-full justify-start" disabled={busy !== null || !check.ok} onClick={() => act('pay')}>
-          {busy === 'pay' ? <Spinner size={15} /> : <Icon name="wallet" size={15} />} Simulate payout{check.ok ? ` · ${sol(t.pending, 3)} SOL` : ''}
-        </button>
-        <button type="button" className="btn-outline w-full justify-start !text-[#FF8A8D] hover:!border-danger/60" disabled={busy !== null || !check.ok} onClick={() => act('fail')}>
-          {busy === 'fail' ? <Spinner size={15} /> : <Icon name="alert" size={15} />} Simulate failure
-        </button>
-        {!check.ok && (
-          <div className="mt-1">
-            <Notice tone={check.claim ? 'warn' : 'info'} icon={check.claim ? 'lock' : 'info'}>
-              {check.reason}
-              {check.claim && (
-                <div className="mt-2">
-                  <Link to="/claim" state={{ serverId: launch.recipient.kind === 'server' ? launch.recipient.serverId : undefined }} className="btn-primary btn-sm">
-                    <Icon name="shield" size={13} /> Go to Claim
-                  </Link>
-                </div>
-              )}
-            </Notice>
-          </div>
-        )}
-        {launch.failure && (
-          <Notice tone="error">
-            <b className="text-ink">Last payout attempt failed</b> {dateTime(launch.failure.at)}. {launch.failure.reason}
+        <div className="flex items-center justify-between">
+          <span className="text-ink-mute">Paid to date</span>
+          <span className="font-bold text-mint-bright">{solLabel(t.paid)}</span>
+        </div>
+        {unclaimed ? (
+          <Notice tone="warn" icon="lock">
+            {launch.recipient.kind === 'server' && launch.recipient.serverName} hasn’t claimed its treasury yet. Payouts start once a server admin verifies and links a wallet.
+            <div className="mt-2">
+              <Link to="/claim" state={{ serverId: launch.recipient.kind === 'server' ? launch.recipient.serverId : undefined }} className="btn-primary btn-sm">
+                <Icon name="shield" size={13} /> Claim this server
+              </Link>
+            </div>
           </Notice>
+        ) : launch.failure ? (
+          <Notice tone="error">
+            <b className="text-ink">Last payout failed</b> {dateTime(launch.failure.at)}. {launch.failure.reason} It will be retried automatically.
+          </Notice>
+        ) : (
+          <p className="text-[12px] text-ink-mute">Payouts are sent automatically once the pending balance reaches {sol(MIN_PAYOUT)} SOL.</p>
         )}
-        <p className="mt-1 text-[11.5px] leading-relaxed text-ink-dim">
-          Each fee event splits exactly: platform = floor(gross ÷ 10), recipient = remainder. Payouts move the full pending balance once (min {sol(MIN_PAYOUT)} SOL).
-        </p>
       </div>
     </section>
   );
 }
 
-function RecipientPanel({ state, launch }: { state: DemoState; launch: Launch }) {
-  const dest = payoutDestination(state, launch);
-  if (launch.recipient.kind === 'member') {
-    const u = userById(launch.recipient.userId);
+function RecipientPanel({ data, launch }: { data: Snapshot; launch: Launch }) {
+  const dest = payoutDestination(data, launch);
+  const r = launch.recipient;
+  if (r.kind === 'member')
     return (
       <section className="card overflow-hidden">
-        <div className="h-12" style={{ background: `linear-gradient(135deg, ${u?.color}, #4752C4)` }} />
+        <div className="h-12 bg-gradient-to-br from-blurple to-blurple-hover" />
         <div className="px-4 pb-4">
           <div className="-mt-6 inline-flex rounded-full border-4 border-card">
-            <Avatar user={u} size={48} status />
+            <Avatar name={r.username} user={r.discordId ? { id: r.discordId, username: r.username } : null} size={48} />
           </div>
           <div className="text-[11px] font-bold uppercase tracking-wide text-ink-mute">Member recipient</div>
-          <div className="text-[16px] font-bold text-ink">{u?.displayName}</div>
-          <div className="text-[13px] text-ink-soft">@{u?.username}</div>
+          <div className="text-[16px] font-bold text-ink">@{r.username}</div>
           <div className="mt-3 divide-y divide-line/40 rounded-lg bg-deep px-3">
-            <KV k="Discord ID" v={u?.discordId} mono />
-            <KV k="Linked demo wallet" v={dest ? shortAddr(dest, 5, 5) : '—'} mono />
-            <KV k="Status" v={<WalletStatus state={state} launch={launch} />} />
+            {r.discordId && <KV k="Discord ID" v={r.discordId} mono />}
+            <KV k="Payout wallet" v={dest ? <a className="link mono" href={solscanAccount(dest)} target="_blank" rel="noreferrer noopener">{shortAddr(dest, 5, 5)}</a> : '—'} />
+            <KV k="Status" v={<WalletStatus data={data} launch={launch} />} />
           </div>
         </div>
       </section>
     );
-  }
-  const sv = serverById(launch.recipient.serverId);
-  const claim = state.claims[launch.recipient.serverId];
+  const claim = data.claims[r.serverId];
   return (
     <section className="card p-4">
       <div className="text-[11px] font-bold uppercase tracking-wide text-ink-mute">Server treasury recipient</div>
       <div className="mt-2 flex items-center gap-3">
-        <ServerIcon server={sv} size={44} />
-        <div className="min-w-0">
-          <div className="truncate text-[16px] font-bold text-ink">{sv?.name}</div>
-          <div className="text-[12.5px] text-ink-mute">{sv?.members.toLocaleString('en-US')} fictional members</div>
-        </div>
+        <ServerIcon name={r.serverName} iconUrl={r.iconUrl} id={r.serverId} size={44} />
+        <div className="min-w-0 truncate text-[16px] font-bold text-ink">{r.serverName}</div>
       </div>
       <div className="mt-3 divide-y divide-line/40 rounded-lg bg-deep px-3">
-        <KV k="Server ID" v={sv?.discordId} mono />
-        <KV k="Announcements" v={`#${sv?.announcementChannel}`} />
+        <KV k="Server ID" v={r.serverId} mono />
+        {r.channel && <KV k="Announcements" v={`#${r.channel}`} />}
         <KV k="Treasury" v={claim ? <span className="text-mint-bright">Claimed</span> : <span className="text-gold">Unclaimed</span>} />
-        {claim && <KV k="Treasury wallet" v={shortAddr(claim.wallet, 5, 5)} mono />}
-        {claim && <KV k="Verified admin" v={`@${userById(claim.adminId)?.username}`} />}
+        {claim && <KV k="Treasury wallet" v={<a className="link mono" href={solscanAccount(claim.wallet)} target="_blank" rel="noreferrer noopener">{shortAddr(claim.wallet, 5, 5)}</a>} />}
+        {claim && <KV k="Verified admin" v={`@${claim.adminUsername}`} />}
       </div>
-      {!isClaimed(state, launch.recipient.serverId) && (
-        <Link to="/claim" state={{ serverId: sv?.id }} className="btn-primary btn-sm mt-3 w-full">
-          <Icon name="shield" size={13} /> Claim this server
-        </Link>
-      )}
     </section>
   );
 }
 
-function Metadata({ state, launch, onReceipt }: { state: DemoState; launch: Launch; onReceipt: (r: ReceiptTarget) => void }) {
-  const [open, setOpen] = useState(false);
-  const dev = userById(launch.devUserId);
-  const rid = launchReceiptId(launch);
+function Metadata({ launch, onTx }: { launch: Launch; onTx: (r: TxTarget) => void }) {
   return (
     <section className="card p-4">
-      <h2 className="mb-2 text-[14px] font-bold text-ink">Launch metadata</h2>
+      <h2 className="mb-2 text-[14px] font-bold text-ink">Launch details</h2>
       <div className="divide-y divide-line/40">
         <KV k="Created" v={date(launch.createdAt)} />
-        <KV k="Developer" v={<span className="inline-flex items-center gap-1.5"><Avatar user={dev} size={16} />@{dev?.username}</span>} />
-        <KV k="Dev wallet" v={shortAddr(launch.devWallet, 5, 5)} mono />
-        <KV k="Demo dev buy" v={solLabel(launch.devBuy)} />
+        {launch.devUsername && <KV k="Developer" v={`@${launch.devUsername}`} />}
+        <KV k="Dev wallet" v={<a className="link mono" href={solscanAccount(launch.devWallet)} target="_blank" rel="noreferrer noopener">{shortAddr(launch.devWallet, 5, 5)}</a>} />
+        <KV k="Dev buy" v={solLabel(launch.devBuy)} />
         <KV k="Recipient" v={<RecipientInline launch={launch} size={16} />} />
         <KV k="Payout message" v={launch.payoutMessage || '—'} />
-        <KV k="Data" v={launch.sample ? 'Sample data' : 'Created in your demo'} />
-      </div>
-      <div className="mt-3 rounded-lg border border-line/50">
-        <button type="button" className="flex w-full items-center justify-between px-3 py-2 text-[13px] font-medium text-ink-body hover:bg-hover" aria-expanded={open} onClick={() => setOpen((v) => !v)}>
-          <span className="inline-flex items-center gap-2">
-            <Icon name="receipt" size={14} /> Launch receipt details
-          </span>
-          <Icon name="chevronDown" size={14} className={cx('transition-transform', open && 'rotate-180')} />
-        </button>
-        {open && (
-          <div className="border-t border-line/50 px-3 py-2 text-[12.5px]">
-            <KV k="Receipt" v={<MonoId value={rid} />} />
-            <KV k="Demo mint" v={<MonoId value={launch.mint} />} />
-            <KV k="Timestamp" v={dateTime(launch.createdAt)} />
-            <KV k="Broadcast" v="Not broadcast (demo)" />
-            <button type="button" className="link mt-1 text-[12px]" onClick={() => onReceipt({ kind: 'launch', launch })}>
-              Open full receipt
-            </button>
-          </div>
-        )}
+        {launch.signature && <KV k="Launch tx" v={<a className="link mono" href={solscanTx(launch.signature)} target="_blank" rel="noreferrer noopener">{shortAddr(launch.signature, 5, 5)}</a>} />}
       </div>
       <div className="mt-3 flex flex-wrap gap-1">
-        <CopyButton value={launch.id} label="Copy launch ID" toast="Launch ID copied" />
-        <CopyButton value={launch.mint} label="Copy demo mint" toast="Demo mint ID copied" />
+        <button type="button" className="btn-ghost btn-sm" onClick={() => onTx({ kind: 'launch', launch })}>
+          <Icon name="receipt" size={13} /> All details
+        </button>
+        <CopyButton value={launch.mint} label="Copy mint" toast="Mint address copied" />
       </div>
-      <p className="mt-2 text-[11px] text-ink-dim">Demo clock: {dateTime(state.now)}</p>
+      <p className="mt-2 text-[11px] text-ink-dim">
+        Trade on <a className="link" href={DCM_PUMP_URL.replace(/[^/]+$/, launch.mint)} target="_blank" rel="noreferrer noopener">pump.fun</a>
+      </p>
     </section>
   );
 }

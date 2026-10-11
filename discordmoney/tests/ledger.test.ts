@@ -1,149 +1,85 @@
-import { beforeEach, describe, expect, it } from 'vitest';
-import * as A from '../src/lib/actions';
-import { DAY, HOUR } from '../src/lib/format';
-import { allTotals, canPayout, launchStatus, offerView, platformTotals, splitFee } from '../src/lib/ledger';
-import { createSeed, seedInvariants } from '../src/lib/seed';
-import { getState, resetDemo, setState } from '../src/lib/store';
+import { describe, expect, it } from 'vitest';
+import { EMPTY_SNAPSHOT } from '../src/lib/backend';
+import { HOUR, solToLamports } from '../src/lib/format';
+import { aggregate, allTotals, launchStatus, offerView, platformTotals, splitFee } from '../src/lib/ledger';
+import type { Launch, Offer, Snapshot } from '../src/lib/types';
+import { isSolanaAddress, validateSocial } from '../src/lib/validate';
 
-beforeEach(() => resetDemo());
+const W = '7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU';
+const launch = (id: string, recipient: Launch['recipient']): Launch => ({
+  id,
+  mint: `mint${id}`,
+  name: id,
+  ticker: id.toUpperCase(),
+  description: '',
+  imageUrl: '',
+  createdAt: 0,
+  devWallet: W,
+  recipient,
+  payoutMessage: '',
+  devBuy: 0,
+  socials: {},
+  mcap: [],
+  failure: null,
+});
+let n = 0;
+const fee = (launchId: string, gross: number) => ({ id: `f${n++}`, launchId, at: 1, gross, ...splitFee(gross) });
 
 describe('fee split', () => {
-  it('floors the platform share and gives the remainder to the recipient', () => {
+  it('floors the platform share; recipient gets the exact remainder', () => {
     expect(splitFee(1_000_000_009)).toEqual({ platform: 100_000_000, recipient: 900_000_009 });
     expect(splitFee(9)).toEqual({ platform: 0, recipient: 9 });
     for (const g of [1, 7, 123_456_789, 2_500_000_001]) {
       const { platform, recipient } = splitFee(g);
       expect(platform + recipient).toBe(g);
-      expect(Number.isInteger(platform) && Number.isInteger(recipient)).toBe(true);
     }
   });
-});
-
-describe('seed', () => {
-  it('meets data requirements and invariants', () => {
-    const s = createSeed(Date.UTC(2026, 9, 1));
-    expect(seedInvariants(s)).toEqual([]);
-    const statuses = new Set(s.launches.map((l) => launchStatus(s, l)));
-    expect([...statuses].sort()).toEqual(['accruing', 'awaiting-claim', 'failed', 'paid', 'ready']);
-    const offerStatuses = new Set(s.offers.map((o) => offerView(o, s.now).status));
-    for (const st of ['awaiting', 'accepted', 'posted', 'retention', 'completed', 'refunded', 'cancelled']) expect(offerStatuses.has(st as never)).toBe(true);
-    expect(platformTotals(s).spent).toBeLessThanOrEqual(platformTotals(s).revenue);
-  });
-  it('is deterministic', () => {
-    const t = Date.UTC(2026, 9, 1);
-    const a = createSeed(t);
-    const b = createSeed(t);
-    expect({ ...a, refreshedAt: 0 }).toEqual({ ...b, refreshedAt: 0 });
+  it('parses SOL into lamports without float drift', () => {
+    expect(solToLamports('0.1')).toBe(100_000_000);
+    expect(solToLamports('1.000000001')).toBe(1_000_000_001);
+    expect(solToLamports('abc')).toBeNull();
   });
 });
 
-describe('payouts', () => {
-  it('pays pending exactly once', () => {
-    const s = getState();
-    const l = s.launches.find((x) => launchStatus(s, x) === 'ready')!;
-    const before = allTotals(s).get(l.id)!;
-    const r = A.simulatePayout(l.id);
-    expect(r.ok).toBe(true);
-    const after = allTotals(getState()).get(l.id)!;
-    expect(after.paid).toBe(before.paid + before.pending);
-    expect(after.pending).toBe(0);
-    expect(A.simulatePayout(l.id).ok).toBe(false);
-  });
-  it('blocks unclaimed servers until claimed, then allows payout', () => {
-    const s = getState();
-    const l = s.launches.find((x) => x.recipient.kind === 'server' && x.recipient.serverId === 'srv-orbit' && allTotals(s).get(x.id)!.pending > 0)!;
-    const c = canPayout(s, l);
-    expect(c.ok).toBe(false);
-    A.connectDiscord('usr-quiet');
-    const bad = A.claimServer({ serverId: 'srv-orbit', discordId: '1150276630184951808', adminId: 'usr-quiet', wallet: 'X', code: 'DCM-DEMO-0000' });
-    expect(bad.ok).toBe(false);
-    const good = A.claimServer({ serverId: 'srv-orbit', discordId: '1150276630184951808', adminId: 'usr-nova', wallet: 'W', code: 'DCM-DEMO-0001' });
-    expect(good.ok).toBe(true);
-    const dup = A.claimServer({ serverId: 'srv-orbit', discordId: '1150276630184951808', adminId: 'usr-nova', wallet: 'W2', code: 'DCM-DEMO-0002' });
-    expect(dup.ok).toBe(false);
-    expect(A.simulatePayout(l.id).ok).toBe(true);
-  });
-  it('failure moves no funds and retry clears it', () => {
-    const s = getState();
-    const l = s.launches.find((x) => launchStatus(s, x) === 'ready')!;
-    const pending = allTotals(s).get(l.id)!.pending;
-    expect(A.simulateFailure(l.id).ok).toBe(true);
-    expect(allTotals(getState()).get(l.id)!.pending).toBe(pending);
-    expect(launchStatus(getState(), getState().launches.find((x) => x.id === l.id)!)).toBe('failed');
-    expect(A.simulatePayout(l.id).ok).toBe(true);
-    expect(launchStatus(getState(), getState().launches.find((x) => x.id === l.id)!)).toBe('paid');
-  });
-  it('generated fees flow to every aggregate', () => {
-    const before = getState();
-    const l = before.launches[0];
-    const r = A.generateFees(l.id);
-    expect(r.ok).toBe(true);
-    if (!r.ok) return;
-    const after = getState();
-    expect(platformTotals(after).revenue - platformTotals(before).revenue).toBe(r.value.platform);
-    expect(allTotals(after).get(l.id)!.earned - allTotals(before).get(l.id)!.earned).toBe(r.value.recipient);
-  });
-  it('buybacks only spend available revenue', () => {
-    const r = A.runBuyback();
-    if (r.ok) expect(platformTotals(getState()).available).toBe(0);
-    expect(A.runBuyback().ok).toBe(false);
-  });
-});
-
-describe('sponsored post state machine', () => {
-  const mk = () => {
-    A.connectWallet('usr-nova');
-    const r = A.createOffer({ serverId: 'srv-pixel', channel: 'announcements', price: 1_000_000_007, postWithinDays: 1, required: 'Pixel Jam', notes: '' });
-    if (!r.ok) throw new Error(r.error);
-    return r.value;
+describe('ledger', () => {
+  const data: Snapshot = {
+    ...EMPTY_SNAPSHOT,
+    launches: [launch('a', { kind: 'member', username: 'nova', wallet: W }), launch('b', { kind: 'server', serverId: '123456789012345678', serverName: 'S' })],
+    fees: [fee('a', 2e9), fee('a', 1e9), fee('b', 1e9)],
+    payouts: [{ id: 'p', launchId: 'a', at: 2, amount: 1.8e9, status: 'completed', to: W }],
+    buybacks: [{ id: 'bb', at: 3, solSpent: 0.1e9, dcmBought: 5, dcmBurned: 5 }],
   };
-  const view = (id: string) => offerView(getState().offers.find((o) => o.id === id)!, getState().now);
-
-  it('pays after 72h retention with a 90/10 split, never refunds after', () => {
-    const id = mk();
-    expect(A.submitMessage(id, 'pixel jam').ok).toBe(false); // not accepted
-    A.acceptOffer(id);
-    const r = A.submitMessage(id, 'Join the PIXEL JAM tonight');
-    expect(r.ok && r.value.qualifies).toBe(true);
-    expect(A.processOfferPayout(id).ok).toBe(false);
-    A.advanceClock(72 * HOUR);
-    expect(view(id).canPay).toBe(true);
-    expect(A.processOfferPayout(id).ok).toBe(true);
-    const o = getState().offers.find((x) => x.id === id)!;
-    expect(o.settlement?.kind).toBe('paid');
-    if (o.settlement?.kind === 'paid') expect(o.settlement.platformAmount + o.settlement.recipientAmount).toBe(1_000_000_007);
-    expect(A.processOfferRefund(id).ok).toBe(false);
-    expect(A.processOfferPayout(id).ok).toBe(false);
+  it('derives totals, statuses and aggregates from the same ledger', () => {
+    expect(allTotals(data).get('a')).toMatchObject({ gross: 3e9, platform: 0.3e9, earned: 2.7e9, paid: 1.8e9, pending: 0.9e9 });
+    expect(launchStatus(data, data.launches[0])).toBe('ready');
+    expect(launchStatus(data, data.launches[1])).toBe('awaiting-claim');
+    expect(aggregate(data)).toMatchObject({ launches: 2, gross: 4e9, paid: 1.8e9 });
+    expect(platformTotals(data)).toMatchObject({ revenue: 0.4e9, spent: 0.1e9, available: 0.3e9, burned: 5 });
   });
-  it('rejects non-matching text and refunds after the deadline', () => {
-    const id = mk();
-    A.acceptOffer(id);
-    const r = A.submitMessage(id, 'unrelated text');
-    expect(r.ok && r.value.qualifies).toBe(false);
-    expect(A.processOfferRefund(id).ok).toBe(false);
-    A.advanceClock(DAY + HOUR);
-    expect(A.submitMessage(id, 'pixel jam').ok).toBe(false);
-    expect(A.processOfferRefund(id).ok).toBe(true);
-    expect(A.processOfferPayout(id).ok).toBe(false);
-  });
-  it('early removal invalidates; replacement restarts retention', () => {
-    const id = mk();
-    A.acceptOffer(id);
-    A.submitMessage(id, 'pixel jam');
-    A.advanceClock(10 * HOUR);
-    A.submitMessage(id, 'pixel jam v2');
-    A.advanceClock(70 * HOUR); // 80h since first, 70h since replacement
-    expect(view(id).canPay).toBe(false);
-    A.removeMessage(id);
-    expect(view(id).status).toBe('accepted');
-    expect(view(id).canRefund).toBe(true); // deadline (24h) passed, no live post
+  it('handles an empty snapshot', () => {
+    expect(aggregate(EMPTY_SNAPSHOT)).toMatchObject({ launches: 0, gross: 0 });
   });
 });
 
-describe('storage', () => {
-  it('state survives a set', () => {
-    const s = getState();
-    setState({ ...s, now: s.now + 1 });
-    expect(getState().now).toBe(s.now + 1);
+describe('offers', () => {
+  const base: Offer = { id: 'o', createdAt: 0, sponsorWallet: W, serverId: '1', serverName: 'S', channel: 'c', price: 1e9, postWithinDays: 1, required: 'x', notes: '', messages: [], log: [] };
+  it('derives status from timestamps', () => {
+    expect(offerView(base, 0).status).toBe('awaiting');
+    const acc = { ...base, acceptedAt: 0, deadline: 24 * HOUR };
+    expect(offerView(acc, HOUR).status).toBe('accepted');
+    const posted = { ...acc, messages: [{ id: 'm', text: 'x', submittedAt: HOUR, qualifies: true }] };
+    expect(offerView(posted, HOUR).status).toBe('posted');
+    expect(offerView(posted, 10 * HOUR).status).toBe('retention');
+    expect(offerView({ ...posted, settlement: { kind: 'paid' as const, at: 1, recipientAmount: 9e8, platformAmount: 1e8, to: 'S' } }, 0).status).toBe('completed');
+  });
+});
+
+describe('validation', () => {
+  it('checks Solana addresses and social URLs', () => {
+    expect(isSolanaAddress(W)).toBe(true);
+    expect(isSolanaAddress('0xabc')).toBe(false);
+    expect(validateSocial('x', 'https://x.com/a')).toBeNull();
+    expect(validateSocial('x', 'https://evil.com')).not.toBeNull();
+    expect(validateSocial('discord', 'https://discord.gg/abc')).toBeNull();
   });
 });

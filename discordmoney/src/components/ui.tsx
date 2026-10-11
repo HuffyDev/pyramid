@@ -1,7 +1,6 @@
 import { useState, type ReactNode } from 'react';
-import { serverById, userById } from '../lib/fixtures';
 import { OFFER_STATUS_LABEL, STATUS_LABEL, type LaunchStatus } from '../lib/ledger';
-import type { CoinImage, OfferStatus, Server, User } from '../lib/types';
+import type { OfferStatus, Person } from '../lib/types';
 import { Icon, type IconName } from './Icon';
 import { useToast } from './Toast';
 
@@ -49,159 +48,70 @@ export function OfferBadge({ status }: { status: OfferStatus }) {
   return <span className={cx('chip ring-1 ring-inset', OFFER_STYLE[status])}>{OFFER_STATUS_LABEL[status]}</span>;
 }
 
-export function SampleTag({ sample, label }: { sample: boolean; label?: string }) {
-  return sample ? (
-    <span className="chip bg-white/[0.05] text-[10px] uppercase tracking-wide text-ink-mute ring-1 ring-inset ring-white/10">
-      {label ?? 'Sample data'}
-    </span>
-  ) : (
-    <span className="chip bg-blurple/15 text-[10px] uppercase tracking-wide text-blurple-light ring-1 ring-inset ring-blurple/25">
-      {label ?? 'Your demo'}
-    </span>
-  );
-}
-
-export function DemoTag({ children = 'Demo' }: { children?: ReactNode }) {
-  return (
-    <span className="chip bg-blurple text-[10px] uppercase tracking-wider text-white">{children}</span>
-  );
-}
 
 /* --------------------------------- Avatars -------------------------------- */
 
-export function Avatar({ user, size = 32, status }: { user?: User; size?: number; status?: boolean }) {
-  const initials = (user?.displayName ?? '?')
-    .split(/\s|\./)
+const SWATCH = ['#5865F2', '#23A55A', '#EB459E', '#F0B232', '#00A8FC', '#F23F43', '#949CF7', '#80848E'];
+export const colorFor = (key: string) => {
+  let h = 0;
+  for (let i = 0; i < key.length; i++) h = (h * 31 + key.charCodeAt(i)) >>> 0;
+  return SWATCH[h % SWATCH.length];
+};
+const initialsOf = (name: string, n = 2) =>
+  name
+    .replace(/^@/, '')
+    .split(/[\s._-]+/)
+    .filter(Boolean)
     .map((p) => p[0])
     .join('')
-    .slice(0, 2)
-    .toUpperCase();
+    .slice(0, n)
+    .toUpperCase() || '?';
+
+export function Avatar({ user, name, size = 32, status }: { user?: Person | null; name?: string; size?: number; status?: boolean }) {
+  const label = user?.displayName ?? user?.username ?? name ?? '?';
   return (
     <span className="relative inline-flex shrink-0" style={{ width: size, height: size }}>
-      <span
-        className="inline-flex h-full w-full items-center justify-center rounded-full font-semibold text-white"
-        style={{ background: user?.color ?? '#4E5058', fontSize: size * 0.38 }}
-        aria-hidden="true"
-      >
-        {initials}
-      </span>
-      {status && (
+      {user?.avatarUrl ? (
+        <img src={user.avatarUrl} alt="" className="h-full w-full rounded-full object-cover" />
+      ) : (
         <span
-          className="absolute -bottom-0.5 -right-0.5 rounded-full border-[3px] border-card bg-mint"
-          style={{ width: size * 0.42, height: size * 0.42 }}
-        />
+          className="inline-flex h-full w-full items-center justify-center rounded-full font-semibold text-white"
+          style={{ background: colorFor(user?.id ?? label), fontSize: size * 0.38 }}
+          aria-hidden="true"
+        >
+          {initialsOf(label)}
+        </span>
       )}
+      {status && <span className="absolute -bottom-0.5 -right-0.5 rounded-full border-[3px] border-card bg-mint" style={{ width: size * 0.42, height: size * 0.42 }} />}
     </span>
   );
 }
 
-export function ServerIcon({ server, size = 32, rounded = 'rounded-[30%]' }: { server?: Server; size?: number; rounded?: string }) {
-  const initials = (server?.name ?? '?')
-    .split(' ')
-    .map((p) => p[0])
-    .join('')
-    .slice(0, 3);
+export function ServerIcon({ name, iconUrl, id, size = 32, rounded = 'rounded-[30%]' }: { name: string; iconUrl?: string; id?: string; size?: number; rounded?: string }) {
+  if (iconUrl) return <img src={iconUrl} alt="" width={size} height={size} className={cx('shrink-0 object-cover', rounded)} style={{ width: size, height: size }} />;
   return (
     <span
       className={cx('inline-flex shrink-0 items-center justify-center font-semibold text-white', rounded)}
-      style={{ width: size, height: size, background: server?.color ?? '#4E5058', fontSize: size * 0.36 }}
+      style={{ width: size, height: size, background: colorFor(id ?? name), fontSize: size * 0.36 }}
       aria-hidden="true"
     >
-      {initials}
+      {initialsOf(name, 3)}
     </span>
   );
 }
 
-export function UserChip({ userId, size = 20 }: { userId: string; size?: number }) {
-  const u = userById(userId);
+/* -------------------------------- Coin image ------------------------------- */
+
+export function CoinImage({ src, name, size = 48, className }: { src?: string; name: string; size?: number; className?: string }) {
+  if (src) return <img src={src} alt={`${name} coin`} width={size} height={size} className={cx('shrink-0 rounded-xl object-cover', className)} style={{ width: size, height: size }} />;
   return (
-    <span className="inline-flex min-w-0 items-center gap-1.5">
-      <Avatar user={u} size={size} />
-      <span className="truncate text-ink-body">@{u?.username ?? 'unknown'}</span>
-    </span>
-  );
-}
-
-export function ServerChip({ serverId, size = 20 }: { serverId: string; size?: number }) {
-  const s = serverById(serverId);
-  return (
-    <span className="inline-flex min-w-0 items-center gap-1.5">
-      <ServerIcon server={s} size={size} />
-      <span className="truncate text-ink-body">{s?.name ?? 'Unknown'}</span>
-    </span>
-  );
-}
-
-/* -------------------------------- Coin art -------------------------------- */
-
-const PALETTES = [
-  ['#5865F2', '#949CF7'],
-  ['#23A55A', '#57F287'],
-  ['#EB459E', '#F68BC4'],
-  ['#F0B232', '#FEE75C'],
-  ['#00A8FC', '#7FD3FF'],
-  ['#F23F43', '#FF9A9C'],
-  ['#4752C4', '#EB459E'],
-  ['#1A8B49', '#00A8FC'],
-];
-const GLYPHS = [
-  'M12 4c4.4 0 8 2.9 8 6.6 0 3.6-3.6 6.5-8 6.5-.8 0-1.6-.1-2.3-.3L6 19v-3.4C4.8 14.4 4 12.6 4 10.6 4 6.9 7.6 4 12 4z',
-  'M13 3 5 13.5h6L10 21l8-10.5h-6z',
-  'M12 3l2.6 5.6 6.1.7-4.5 4.2 1.2 6L12 16.6 6.6 19.5l1.2-6-4.5-4.2 6.1-.7z',
-  'M12 3 20 12l-8 9-8-9z',
-  'M5 19c0-8 5-14 14-14 0 9-6 14-14 14zM5 19l7-7',
-  'M7 8a2.5 2.5 0 1 1 0-5 2.5 2.5 0 0 1 0 5zM17 8a2.5 2.5 0 1 1 0-5 2.5 2.5 0 0 1 0 5zM4 13c0 4 3.6 7 8 7s8-3 8-7c0-2.5-3.6-4-8-4s-8 1.5-8 4z',
-  'M12 20a8 8 0 1 1 0-16 8 8 0 0 1 0 16zm0-4a4 4 0 1 0 0-8 4 4 0 0 0 0 8z',
-  'M4 15c2-4 4-4 6 0s4 4 6 0 4-4 4-4M4 9c2-4 4-4 6 0s4 4 6 0 4-4 4-4',
-];
-
-export function CoinArt({ image, size = 48, className, label }: { image: CoinImage; size?: number; className?: string; label?: string }) {
-  if (image.kind === 'upload')
-    return (
-      <img
-        src={image.dataUrl}
-        alt={label ? `${label} coin image` : ''}
-        width={size}
-        height={size}
-        className={cx('shrink-0 rounded-xl object-cover', className)}
-        style={{ width: size, height: size }}
-      />
-    );
-  const [a, b] = PALETTES[image.seed % PALETTES.length];
-  const glyph = GLYPHS[(image.seed * 5 + 1) % GLYPHS.length];
-  const id = `g${image.seed}`;
-  const stroke = (image.seed * 5 + 1) % GLYPHS.length >= 6;
-  return (
-    <svg
-      width={size}
-      height={size}
-      viewBox="0 0 48 48"
-      className={cx('shrink-0 rounded-xl', className)}
-      role={label ? 'img' : undefined}
-      aria-label={label ? `${label} coin art` : undefined}
-      aria-hidden={label ? undefined : true}
+    <span
+      className={cx('inline-flex shrink-0 items-center justify-center rounded-xl font-black text-white', className)}
+      style={{ width: size, height: size, background: `linear-gradient(135deg, ${colorFor(name)}, #4752C4)`, fontSize: size * 0.32 }}
+      aria-hidden="true"
     >
-      <defs>
-        <linearGradient id={id} x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0" stopColor={a} />
-          <stop offset="1" stopColor={b} />
-        </linearGradient>
-      </defs>
-      <rect width="48" height="48" fill={`url(#${id})`} />
-      <circle cx="24" cy="24" r="16" fill="rgba(0,0,0,0.16)" />
-      <circle cx="24" cy="24" r="16" fill="none" stroke="rgba(255,255,255,0.35)" strokeWidth="1.2" strokeDasharray="2 2.4" />
-      <g transform="translate(12 12)">
-        <path
-          d={glyph}
-          fill={stroke ? 'none' : '#fff'}
-          stroke="#fff"
-          strokeWidth={stroke ? 2 : 0.6}
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          fillRule="evenodd"
-        />
-      </g>
-    </svg>
+      {initialsOf(name)}
+    </span>
   );
 }
 
@@ -254,7 +164,7 @@ export function MonoId({ value, copy = true, className }: { value: string; copy?
   return (
     <span className={cx('inline-flex min-w-0 items-center gap-0.5', className)}>
       <span className="mono truncate rounded bg-rail px-1.5 py-0.5 text-ink-soft">{value}</span>
-      {copy && <CopyButton value={value} iconOnly label="Copy ID" toast="Demo ID copied" />}
+      {copy && <CopyButton value={value} iconOnly label="Copy" toast="Copied" />}
     </span>
   );
 }

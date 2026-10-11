@@ -173,7 +173,7 @@ export function ConfirmDialog({
 }: {
   open: boolean;
   onClose: () => void;
-  onConfirm: () => void;
+  onConfirm: () => void | Promise<void>;
   title: string;
   body: ReactNode;
   confirmLabel: string;
