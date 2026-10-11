@@ -1,6 +1,8 @@
-# PYRAMID — one always-on process: web + Socket.IO + market poller. DB migrates itself on boot.
-modules = ["nodejs-22", "postgresql-16"]
-run = "npm run build && npm start"
+# Publishes DiscordMoney (the static React app in ./discordmoney).
+# Build: clean install from the lockfile (dev deps are needed for tsc + vite) and `vite build` → discordmoney/dist.
+# Serve: discordmoney/server.mjs — zero-dependency static server with SPA fallback, listens on $PORT.
+modules = ["nodejs-22"]
+run = "cd discordmoney && npm ci --include=dev && npm run build && npm start"
 
 [nix]
 channel = "stable-24_05"
@@ -10,9 +12,9 @@ localPort = 5000
 externalPort = 80
 
 [deployment]
-deploymentTarget = "vm"
-build = ["sh", "-c", "npm install && npm run build"]
-run = ["sh", "-c", "npm start"]
+deploymentTarget = "autoscale"
+build = ["sh", "-c", "cd discordmoney && npm ci --include=dev && npm run build"]
+run = ["sh", "-c", "cd discordmoney && npm start"]
 
 [env]
 PORT = "5000"

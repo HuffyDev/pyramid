@@ -14,15 +14,18 @@ $DCM contract address: `CAV5LevZc5AonWsgRKEqjgEqXnptXFgudt52Mrxgpump` · X: http
 cd discordmoney
 npm install
 npm run dev        # http://localhost:5173
-# or a production build:
-npm run build && npm run preview   # http://localhost:4173
+# production build + server (what Replit publishing runs):
+npm ci --include=dev && npm run build && npm start   # http://localhost:5000 ($PORT)
 ```
 
-Checks: `npm run typecheck`, `npm test` (ledger + state-machine unit tests),
-`npm run e2e <dir-with-coin.png-and-bad.txt>` (Playwright; needs `npm run preview` running).
+Publishing on Replit is configured in the repo-root `.replit`: it builds from this folder
+(`npm ci --include=dev && npm run build` → `dist/`) and serves with `server.mjs`, a
+zero-dependency Node static server with SPA fallback (deep links like `/launches/dm-1a2b`
+work on reload), long-cache headers for hashed assets and a `/healthz` endpoint.
 
-Static hosting: serve `dist/` with an SPA fallback to `index.html` so deep links like
-`/launches/dm-1a2b` reload correctly.
+Checks: `npm run typecheck`, `npm test` (ledger + state-machine unit tests),
+`npm run e2e <dir-with-coin.png-and-bad.txt>` (Playwright; needs the app served on port 4173,
+e.g. `PORT=4173 npm start`).
 
 ## Routes
 
