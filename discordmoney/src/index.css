@@ -1,0 +1,135 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    color-scheme: dark;
+  }
+  html {
+    background: #313338;
+    -webkit-text-size-adjust: 100%;
+  }
+  body {
+    @apply bg-page font-sans text-ink-body antialiased;
+    font-feature-settings: 'cv11', 'ss01';
+    min-height: 100vh;
+  }
+  ::selection {
+    background: rgba(88, 101, 242, 0.45);
+    color: #fff;
+  }
+  :focus-visible {
+    outline: 2px solid #00a8fc;
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+  button:disabled {
+    cursor: not-allowed;
+  }
+  input[type='number']::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+  }
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: #1a1b1e transparent;
+  }
+}
+
+@layer components {
+  .shell {
+    @apply mx-auto w-full max-w-shell px-4 sm:px-6;
+  }
+  .card {
+    @apply rounded-xl border border-line/70 bg-card shadow-card;
+  }
+  .inset {
+    @apply rounded-lg border border-black/20 bg-deep;
+  }
+  .label {
+    @apply mb-1.5 block text-[11px] font-bold uppercase tracking-[0.04em] text-ink-soft;
+  }
+  .input {
+    @apply w-full rounded-[4px] border border-black/30 bg-input px-3 py-2.5 text-[15px] text-ink-body placeholder:text-ink-dim
+      transition-colors duration-100 hover:border-black/60 focus:border-blurple focus:outline-none focus-visible:outline-none;
+  }
+  .input-error {
+    @apply border-danger/80 hover:border-danger focus:border-danger;
+  }
+  .btn {
+    @apply inline-flex min-h-[38px] select-none items-center justify-center gap-2 rounded-[4px] px-4 text-sm font-medium transition-colors
+      duration-100 disabled:opacity-50;
+  }
+  .btn-primary {
+    @apply btn bg-blurple text-white hover:bg-blurple-hover active:bg-blurple-press;
+  }
+  .btn-secondary {
+    @apply btn bg-chip text-white hover:bg-[#6D6F78] active:bg-[#80848E];
+  }
+  .btn-ghost {
+    @apply btn bg-transparent text-ink-soft hover:bg-hover hover:text-ink;
+  }
+  .btn-success {
+    @apply btn bg-mint text-white hover:bg-[#1A8B49] active:bg-[#15783E];
+  }
+  .btn-danger {
+    @apply btn bg-danger-btn text-white hover:bg-[#A12828];
+  }
+  .btn-outline {
+    @apply btn border border-line bg-transparent text-ink-body hover:border-ink-dim hover:bg-hover;
+  }
+  .btn-sm {
+    @apply min-h-[32px] px-3 text-[13px];
+  }
+  .chip {
+    @apply inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold leading-4;
+  }
+  .mono {
+    @apply font-mono text-[12px] tracking-tight;
+  }
+  .kpi {
+    @apply text-[11px] font-bold uppercase tracking-[0.04em] text-ink-mute;
+  }
+  .link {
+    @apply text-link hover:underline;
+  }
+  .divider {
+    @apply border-t border-line/60;
+  }
+}
+
+.ambient {
+  background:
+    radial-gradient(900px 420px at 18% -8%, rgba(88, 101, 242, 0.22), transparent 62%),
+    radial-gradient(700px 380px at 92% 4%, rgba(235, 69, 158, 0.07), transparent 60%),
+    radial-gradient(800px 500px at 60% 110%, rgba(88, 101, 242, 0.08), transparent 60%);
+}
+
+.dot-grid {
+  background-image: radial-gradient(rgba(255, 255, 255, 0.05) 1px, transparent 1px);
+  background-size: 18px 18px;
+}
+
+.shine {
+  background: linear-gradient(90deg, #f2f3f5 0%, #c9cdfb 55%, #949cf7 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+@keyframes shimmer {
+  0% { background-position: -200px 0; }
+  100% { background-position: 200px 0; }
+}
+.skeleton {
+  background: linear-gradient(90deg, #2b2d31 0, #35373c 50%, #2b2d31 100%);
+  background-size: 400px 100%;
+  animation: shimmer 1.2s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 1ms !important;
+    transition-duration: 1ms !important;
+  }
+}
